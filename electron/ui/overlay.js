@@ -188,6 +188,11 @@ const els = {
   setBaseUrl: $('set-base-url'),
   setApiKey: $('set-api-key'),
   setKeyHint: $('set-key-hint'),
+  testConnection: $('btn-test-connection'),
+  connStatus: $('conn-status'),
+  connResults: $('conn-results'),
+  connResultsSummary: $('conn-results-summary'),
+  connResultsList: $('conn-results-list'),
   setAutoEnabled: $('set-auto-enabled'),
   setAutoAnswer: $('set-auto-answer'),
   visionBase: $('vision-base'),
@@ -328,6 +333,9 @@ const state = {
   drawer: '',
   cropDraft: null,
   cropDrag: null,
+
+  // 连接自检：seq 用来丢弃过期响应，timer 是本轮自动测试的 debounce 句柄。
+  probe: { seq: 0, timer: 0, hasResult: false },
 
   toastTimer: 0,
   toastHideTimer: 0,
@@ -2414,6 +2422,13 @@ function applyPreset(name) {
   });
   refreshModelSelectors();
   showToast(`已填入 ${preset.label} 的端点与模型，可修改后保存。`, 'info');
+  // 预设切换后旧结果不再可信：清空状态，有 Key 就立刻重测。
+  state.probe.seq += 1;
+  state.probe.hasResult = false;
+  setProbeTesting(false);
+  clearProbeResults();
+  if (formHasAnyKey()) void runProbe();
+  else renderProbeDemo();
 }
 
 function clearEnsembleCandidates() {
@@ -2478,6 +2493,7 @@ function openSettings() {
   els.setSensitivity.value = String(auto.sensitivity);
   els.setSensitivityLabel.textContent = describeSensitivity(auto.sensitivity);
   renderEnsembleForm();
+  syncProbeIdle();
   els.settingsError.hidden = true;
   state.cropDraft = currentCrop();
   state.cropDrag = null;
@@ -2700,12 +2716,397 @@ async function saveSettings(event) {
     state.cropDraft = currentCrop();
     renderCropEditor();
     showToast('设置已保存。', 'info');
+    // 保存成功后立刻用已保存的配置验证一次（Key 输入框已清空，走 saved key）。
+    void runProbe();
   } catch (error) {
     const info = toUiError(error);
     showSettingsError(info.code, describeError(info.code, info));
   } finally {
     button.disabled = false;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* connection self-check (CONTRACT-PROBE §3)                           */
+/* ------------------------------------------------------------------ */
+
+const PROBE_KEY_DEBOUNCE_MS = 1000;
+const PROBE_FIELD_DEBOUNCE_MS = 800;
+const PROBE_KEY_MIN_LENGTH = 8;
+
+/** 与 electron/probe.js 的错误码保持一致；中文说明由界面兜底，不信任上游文案。 */
+const CONN_CODE_TEXT = {
+  AUTH: '密钥无效或已过期',
+  PLAN: '该模型不在当前订阅计划内',
+  MODEL_NOT_FOUND: '模型不存在或端点不匹配',
+  RATE_LIMITED: '请求过于频繁，稍后再试',
+  TIMEOUT: '连接超时，请检查网络或端点',
+  NETWORK: '网络不可达，请检查网络或端点',
+  NO_KEY: '未填写 API Key',
+  UPSTREAM: '上游服务返回错误',
+};
+
+const CONN_ROLE_TEXT = { text: '文本', vision: '视觉', candidate: '候选', judge: '评审' };
+
+const PROBE_MODEL_IDS = new Set([
+  'set-model',
+  'vision-model',
+  'set-model-custom',
+  'set-vision-custom',
+  'vision-model-custom',
+]);
+
+function isProbeModelField(id) {
+  if (typeof id !== 'string' || !id) return false;
+  if (PROBE_MODEL_IDS.has(id)) return true;
+  return /^(cand-[0-9]+|judge)-model(-custom)?$/.test(id);
+}
+
+function formApiKey() {
+  return els.setApiKey ? els.setApiKey.value.trim() : '';
+}
+
+/** 表单或已保存设置里是否存在任何可用 Key（决定「演示模式」还是「尚未验证」）。 */
+function formHasAnyKey() {
+  if (formApiKey()) return true;
+  const ai = state.settings.ai;
+  if (ai.hasApiKey || ai.vision.hasApiKey) return true;
+  if (ai.vision.keySource && ai.vision.keySource !== 'none') return true;
+  const savedSlots = [...(ai.ensemble.candidates || []), ai.ensemble.judge];
+  if (savedSlots.some((slot) => slot && slot.keySource && slot.keySource !== 'none')) return true;
+  if (els.visionKey && els.visionKey.value.trim()) return true;
+  const fields = els.ensembleFields;
+  if (fields && [...fields.candidates, fields.judge].some((slot) => slot.key.value.trim())) return true;
+  return false;
+}
+
+/** 把界面上所有明文 Key 从待渲染文本中抹掉，避免任何路径漏出。 */
+function redactSecrets(text) {
+  if (!text) return '';
+  let out = String(text);
+  const secrets = [formApiKey()];
+  if (els.visionKey) secrets.push(els.visionKey.value.trim());
+  if (els.ensembleFields) {
+    for (const slot of [...els.ensembleFields.candidates, els.ensembleFields.judge]) {
+      secrets.push(slot.key.value.trim());
+    }
+  }
+  for (const secret of secrets) {
+    if (secret && secret.length >= 4) out = out.split(secret).join('••••');
+  }
+  return out;
+}
+
+function probeSupported() {
+  const api = window.aqs;
+  return Boolean(api && typeof api.testConnection === 'function');
+}
+
+function probeNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+/** 只读表单，绝不落盘：未保存的 Key / 端点 / 候选都直接进 patch。 */
+function buildProbePatch() {
+  initEnsembleForm();
+  const fields = els.ensembleFields;
+  const ai = {};
+  const baseUrl = els.setBaseUrl.value.trim();
+  const apiKey = formApiKey();
+  const textModel = readModelValue('set-model');
+  const visionModel = readModelValue('set-vision');
+  if (baseUrl) ai.baseUrl = baseUrl;
+  if (apiKey) ai.apiKey = apiKey;
+  if (textModel) ai.model = textModel;
+  if (visionModel) ai.visionModel = visionModel;
+
+  const vision = {
+    baseUrl: els.visionBase ? els.visionBase.value.trim() : '',
+    model: readModelValue('vision-model'),
+  };
+  const visionKey = els.visionKey ? els.visionKey.value.trim() : '';
+  if (visionKey) vision.apiKey = visionKey;
+  ai.vision = vision;
+
+  if (fields) {
+    const candidates = fields.candidates.map((slot, index) => {
+      const entry = {
+        name: slot.name.value.trim(),
+        baseUrl: slot.base.value.trim(),
+        model: readModelValue(`cand-${index}-model`),
+        temperature: probeNumber(slot.temp.value.trim(), DEFAULT_CANDIDATES[index].temperature),
+      };
+      const key = slot.key.value.trim();
+      if (key) entry.apiKey = key;
+      return entry;
+    });
+    const judgeSlot = fields.judge;
+    const judge = {
+      name: judgeSlot.name.value.trim(),
+      baseUrl: judgeSlot.base.value.trim(),
+      model: readModelValue('judge-model'),
+      temperature: probeNumber(judgeSlot.temp.value.trim(), DEFAULT_JUDGE.temperature),
+    };
+    const judgeKey = judgeSlot.key.value.trim();
+    if (judgeKey) judge.apiKey = judgeKey;
+    ai.ensemble = { candidates, judge };
+  }
+
+  return { ai };
+}
+
+/** 端点格式非法时先拦住，避免每次都拿到 BAD_REQUEST。 */
+function probeInputProblem() {
+  const base = els.setBaseUrl.value.trim();
+  if (!validHttpUrl(base)) return '接口地址需以 http:// 或 https:// 开头';
+  const visionBase = els.visionBase ? els.visionBase.value.trim() : '';
+  if (!validHttpUrl(visionBase)) return '视觉 Base URL 需以 http:// 或 https:// 开头';
+  const fields = els.ensembleFields;
+  if (fields && [...fields.candidates, fields.judge].some((slot) => !validHttpUrl(slot.base.value.trim()))) {
+    return '自定义 Base URL 需以 http:// 或 https:// 开头';
+  }
+  return '';
+}
+
+function clearProbeTimer() {
+  if (state.probe.timer) {
+    clearTimeout(state.probe.timer);
+    state.probe.timer = 0;
+  }
+}
+
+function scheduleProbe(delayMs = PROBE_FIELD_DEBOUNCE_MS) {
+  clearProbeTimer();
+  state.probe.timer = setTimeout(() => {
+    state.probe.timer = 0;
+    void runProbe();
+  }, Math.max(0, delayMs));
+}
+
+function setProbeStatus(stateName, text) {
+  if (!els.connStatus) return;
+  els.connStatus.dataset.state = stateName;
+  els.connStatus.textContent = text;
+}
+
+function setProbeTesting(flag) {
+  if (!els.testConnection) return;
+  els.testConnection.disabled = flag;
+  els.testConnection.dataset.testing = String(flag);
+  if (flag) els.testConnection.setAttribute('aria-busy', 'true');
+  else els.testConnection.removeAttribute('aria-busy');
+}
+
+function clearProbeResults() {
+  if (els.connResultsList) els.connResultsList.replaceChildren();
+  if (els.connResultsSummary) els.connResultsSummary.textContent = '检测详情';
+  if (els.connResults) {
+    els.connResults.open = false;
+    els.connResults.hidden = true;
+  }
+}
+
+function renderProbeDemo() {
+  setProbeTesting(false);
+  clearProbeResults();
+  state.probe.hasResult = false;
+  setProbeStatus('demo', '未填写 API Key，当前为演示模式');
+}
+
+function renderProbeFailure(reason) {
+  setProbeTesting(false);
+  clearProbeResults();
+  state.probe.hasResult = true;
+  setProbeStatus('error', `连接失败：${redactSecrets(reason) || '连接失败'}`);
+}
+
+function renderProbeTesting() {
+  setProbeTesting(true);
+  clearProbeResults();
+  setProbeStatus('testing', '正在验证连接…');
+}
+
+/** 打开设置后回到未测试状态（不发起请求）。 */
+function syncProbeIdle() {
+  if (state.probe.timer || state.probe.hasResult) return;
+  setProbeTesting(false);
+  if (formHasAnyKey()) setProbeStatus('idle', '尚未验证连接');
+  else renderProbeDemo();
+}
+
+function connReasonText(result) {
+  if (!result || typeof result !== 'object') return '连接失败';
+  const code = typeof result.code === 'string' ? result.code : '';
+  const known = CONN_CODE_TEXT[code];
+  if (known) return known;
+  const message = typeof result.message === 'string' ? result.message.trim() : '';
+  return redactSecrets(message) || '连接失败';
+}
+
+function connResultText(result) {
+  if (result.ok === true) return '✓ 可用';
+  const code = typeof result.code === 'string' && result.code ? result.code : 'UPSTREAM';
+  const status = Number(result.status);
+  const statusText = Number.isFinite(status) ? `（${status}）` : '';
+  return `✗ ${code}${statusText} ${connReasonText(result)}`;
+}
+
+function normalizeProbeReport(raw) {
+  const list = raw && Array.isArray(raw.results) ? raw.results : [];
+  const results = list.filter((item) => item && typeof item === 'object');
+  const total = results.length;
+  const okCount = results.filter((item) => item.ok === true).length;
+  const summary = raw && raw.summary && typeof raw.summary === 'object' ? raw.summary : {};
+  const slowest = results.reduce((max, item) => Math.max(max, probeNumber(item.latencyMs, 0)), 0);
+  const latency = probeNumber(summary.latencyMs, slowest);
+  return {
+    results,
+    total,
+    okCount,
+    failed: total - okCount,
+    latency: Math.max(0, Math.round(latency)),
+    reason: typeof (raw && raw.reason) === 'string' ? raw.reason : '',
+    ok: !raw || raw.ok !== false,
+  };
+}
+
+function renderProbeResults(report) {
+  if (!els.connResults || !els.connResultsList) return;
+  const fragment = document.createDocumentFragment();
+  let candidateIndex = 0;
+  for (const result of report.results) {
+    const role = typeof result.role === 'string' ? result.role : 'text';
+    let roleText = CONN_ROLE_TEXT[role] || '模型';
+    if (role === 'candidate') {
+      roleText = `候选 ${String.fromCharCode(65 + Math.min(candidateIndex, 25))}`;
+      candidateIndex += 1;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'conn-result';
+    row.setAttribute('data-testid', 'conn-result');
+    row.dataset.role = role;
+    row.dataset.ok = String(result.ok === true);
+
+    const roleEl = document.createElement('span');
+    roleEl.className = 'conn-result-role';
+    roleEl.textContent = roleText;
+
+    const modelEl = document.createElement('span');
+    modelEl.className = 'conn-result-model';
+    const model = typeof result.model === 'string' ? result.model.trim() : '';
+    modelEl.textContent = redactSecrets(model) || '默认模型';
+    modelEl.title = modelEl.textContent;
+
+    const timeEl = document.createElement('span');
+    timeEl.className = 'conn-result-time';
+    const latency = Number(result.latencyMs);
+    timeEl.textContent = Number.isFinite(latency) ? `${Math.max(0, Math.round(latency))}ms` : '—';
+
+    const stateEl = document.createElement('span');
+    stateEl.className = 'conn-result-state';
+    stateEl.textContent = connResultText(result);
+
+    row.append(roleEl, modelEl, timeEl, stateEl);
+    fragment.append(row);
+  }
+
+  els.connResultsList.replaceChildren(fragment);
+  els.connResults.hidden = false;
+  els.connResults.open = true;
+  if (els.connResultsSummary) {
+    els.connResultsSummary.textContent = `检测详情 · ${report.okCount}/${report.total} 可用`;
+  }
+}
+
+function renderProbeResult(raw) {
+  setProbeTesting(false);
+  const report = normalizeProbeReport(raw);
+  state.probe.hasResult = true;
+
+  if (report.reason === 'DEMO' || report.reason === 'NO_KEY') {
+    renderProbeDemo();
+    return;
+  }
+  if (report.total === 0) {
+    if (report.ok) {
+      clearProbeResults();
+      setProbeStatus('ok', '已连接 · 未发现可测试的模型');
+    } else {
+      renderProbeFailure('未返回可用的检测结果');
+    }
+    return;
+  }
+
+  if (report.failed === 0) {
+    setProbeStatus('ok', `已连接 · ${report.okCount}/${report.total} 个模型可用 · ${report.latency}ms`);
+  } else if (report.okCount > 0) {
+    setProbeStatus('partial', `部分模型不可用（${report.failed}/${report.total}）`);
+  } else {
+    const firstFailure = report.results.find((item) => item.ok !== true) || null;
+    setProbeStatus('error', `连接失败：${connReasonText(firstFailure)}`);
+  }
+  renderProbeResults(report);
+}
+
+async function runProbe({ manual = false } = {}) {
+  clearProbeTimer();
+
+  const typedKey = formApiKey();
+  if (typedKey && typedKey.length < PROBE_KEY_MIN_LENGTH) {
+    setProbeTesting(false);
+    setProbeStatus('idle', `API Key 至少需要 ${PROBE_KEY_MIN_LENGTH} 位字符`);
+    return;
+  }
+  if (!formHasAnyKey()) {
+    renderProbeDemo();
+    return;
+  }
+  const problem = probeInputProblem();
+  if (problem) {
+    renderProbeFailure(problem);
+    return;
+  }
+  if (!probeSupported()) {
+    if (manual) renderProbeFailure('当前桌面版本不支持连接自检');
+    return;
+  }
+
+  const patch = buildProbePatch();
+  const token = (state.probe.seq += 1);
+  renderProbeTesting();
+  let raw;
+  try {
+    raw = await window.aqs.testConnection(patch);
+  } catch (error) {
+    if (token !== state.probe.seq) return;
+    const info = toUiError(error, 'testConnection');
+    renderProbeFailure(describeError(info.code, info));
+    return;
+  }
+  if (token !== state.probe.seq) return;
+  renderProbeResult(raw);
+}
+
+function onProbeKeyInput() {
+  clearProbeTimer();
+  const key = formApiKey();
+  if (!key) {
+    state.probe.hasResult = false;
+    clearProbeResults();
+    if (formHasAnyKey()) setProbeStatus('idle', '留空将沿用已保存的密钥');
+    else renderProbeDemo();
+    return;
+  }
+  if (key.length < PROBE_KEY_MIN_LENGTH) {
+    state.probe.hasResult = false;
+    clearProbeResults();
+    setProbeTesting(false);
+    setProbeStatus('idle', `API Key 至少需要 ${PROBE_KEY_MIN_LENGTH} 位字符`);
+    return;
+  }
+  scheduleProbe(PROBE_KEY_DEBOUNCE_MS);
 }
 
 async function persistAuto(patch) {
@@ -2779,6 +3180,8 @@ function openDrawer(kind) {
 
 function closeDrawers() {
   state.drawer = '';
+  // 关闭（含 Esc）不清结果，只停掉尚未触发的自动测试计时。
+  clearProbeTimer();
   els.historyDrawer.hidden = true;
   els.historyDrawer.classList.remove('is-open');
   els.settingsDrawer.hidden = true;
@@ -3163,6 +3566,26 @@ function bindEvents() {
   els.ensembleSlots.addEventListener('input', (event) => {
     const target = event.target;
     if (target && typeof target.id === 'string' && target.id.endsWith('-base')) refreshModelSelectors();
+  });
+
+  // connection self-check triggers (CONTRACT-PROBE §3)
+  if (els.testConnection) {
+    els.testConnection.addEventListener('click', () => {
+      void runProbe({ manual: true });
+    });
+  }
+  els.setApiKey.addEventListener('input', onProbeKeyInput);
+  els.settingsForm.addEventListener('change', (event) => {
+    const target = event.target;
+    const id = target && typeof target.id === 'string' ? target.id : '';
+    if (isProbeModelField(id)) scheduleProbe(PROBE_FIELD_DEBOUNCE_MS);
+  });
+  els.settingsForm.addEventListener('input', (event) => {
+    const target = event.target;
+    const id = target && typeof target.id === 'string' ? target.id : '';
+    const endpointChanged = id === 'set-base-url' || id.endsWith('-base');
+    const customModelChanged = id.endsWith('-custom') && isProbeModelField(id);
+    if (endpointChanged || customModelChanged) scheduleProbe(PROBE_FIELD_DEBOUNCE_MS);
   });
   for (const button of els.presetButtons) {
     button.addEventListener('click', () => applyPreset(button.dataset.preset));

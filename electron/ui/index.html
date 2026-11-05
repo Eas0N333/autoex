@@ -235,6 +235,32 @@
             <input id="set-api-key" type="password" placeholder="sk-…" autocomplete="new-password" spellcheck="false" />
             <span id="set-key-hint" class="field-hint">未配置密钥，当前为演示模式</span>
           </label>
+          <div class="conn-check">
+            <div class="conn-check-head">
+              <button
+                id="btn-test-connection"
+                class="ghost-btn small conn-test"
+                type="button"
+                data-testid="test-connection"
+                aria-describedby="conn-status"
+              >
+                <span class="conn-spinner" aria-hidden="true"></span>
+                <span class="conn-test-label">测试连接</span>
+              </button>
+              <span
+                id="conn-status"
+                class="conn-status"
+                data-testid="conn-status"
+                data-state="idle"
+                role="status"
+                aria-live="polite"
+              >未填写 API Key，当前为演示模式</span>
+            </div>
+            <details id="conn-results" class="conn-results" data-testid="conn-results" hidden>
+              <summary id="conn-results-summary" class="conn-results-summary">检测详情</summary>
+              <div id="conn-results-list" class="conn-results-list"></div>
+            </details>
+          </div>
           <div class="field-row">
             <div class="field">
               <label class="field-label" for="set-model">文本模型</label>

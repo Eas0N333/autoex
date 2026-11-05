@@ -59,6 +59,8 @@ const api = {
 
   updateSettings: (patch) => invoke('aqs:update-settings', patch),
 
+  testConnection: (patch) => invoke('aqs:test-connection', patch),
+
   listSources: () => invoke('aqs:list-sources'),
 
   selectSource: (id) => invoke('aqs:select-source', id),

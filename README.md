@@ -85,6 +85,15 @@ Command Code 只需在「模型服务」填**一个订阅 Key**：候选与评�
 > - Command Code 的 67 个模型是 GOAT 计划可用模型与 `/provider/v1/models` 中支持 `/chat/completions` 的交集。**Claude 系列只提供 `/messages` 端点**，本应用统一走 `/chat/completions`，所以不在下拉里；`Jev` 是 decision 模型，同样不可选。
 > - Command Code 的模型目录可公开查询：`GET https://api.commandcode.ai/provider/v1/models`（含 `supported_endpoints`）。
 
+### 连接自检
+
+设置抽屉「模型服务」里的 API Key 下方常驻一行连接状态：填完 Key 不用等答题，就能立刻知道连接是否成功、哪些模型真的可用。
+
+- **自动触发**：API Key 输入停止 1 秒且长度 ≥ 8 时自动测试（直接用还没保存的 Key，不会顺手存盘）；文本/视觉/候选/评审模型或 Base URL 变化后 0.8 秒自动重测；点「保存」成功后立即再测一次；切换预设会清空旧结果并在已有 Key 时自动测试。留空 Key 时显示「未填写 API Key，当前为演示模式」，不发任何请求。
+- **状态**：测试中显示「正在验证连接…」；全部可用显示「已连接 · N/N 个模型可用 · 耗时」；部分失败显示「部分模型不可用（M/N）」；全部失败显示「连接失败：中文原因」。
+- **每个模型单独检测**：文本、视觉（OCR）、每个候选、评审各占一行，显示角色、模型名、耗时和 ✓/✗，失败时给出 `AUTH（401）`、`PLAN`、`MODEL_NOT_FOUND`、`RATE_LIMITED`、`TIMEOUT`、`NETWORK` 等代码和中文说明（例如 403 会写明「该模型不在当前订阅计划内」）。一个 Key 驱动多个模型时，某个模型不在订阅内不会掩盖其余模型可用。
+- **探测成本与私密性**：每行只是一次 `ping`（最多 8 token，temperature 0，不重试）的真实 `/chat/completions` 请求，**会计费**（通常可忽略），但确实会走你的真实额度。探测结果只展示主机名，界面、日志和返回数据里都不会出现明文 Key 或完整 URL；保存前的临时 Key 只用于本次探测。
+
 ### 自动检测与隐私
 
 - 只捕获你选中的那一个窗口；帧在渲染进程 canvas 内缩放、裁剪并编码为 JPEG，仅在内存中转发给视觉模型，**不写入磁盘**。
@@ -169,7 +178,7 @@ npm start
 ## 测试
 
 ```bash
-npm test              # node:test 单测/集成测试（85 项），无网络、无 Key，端口随机
+npm test              # node:test 单测/集成测试（99 项），无网络、无 Key，端口随机
 npm run smoke         # 启动真实 HTTP 进程跑完整 demo 链路，输出 SMOKE OK
 npm run desktop:smoke # 启动真实 Electron 进程，校验左边缘停靠 + 截图，输出 DESKTOP SMOKE OK
 ```
@@ -182,7 +191,7 @@ npm run desktop:smoke # 启动真实 Electron 进程，校验左边缘停靠 + �
 server/  config.js 配置 · provider.js 模型客户端（live/demo）· recognize.js 视觉识别
          answer.js 解答提示词与流式 · index.js HTTP/SSE/静态/限流 · cache.js · mock.js
          engine.js 主进程/HTTP 共用的引擎 · ensemble.js 三模型并行 + 评审 · config.js 配置
-electron/ main.js 窗口/托盘/快捷键 · settings.js 配置与密钥掩码 · model-catalog.js 内置模型目录（下拉选项）· sources.js 窗口源 · preload.cjs · ui/ 悬浮窗前端
+electron/ main.js 窗口/托盘/快捷键 · probe.js 连接自检 · settings.js 配置与密钥掩码 · model-catalog.js 内置模型目录（下拉选项）· sources.js 窗口源 · preload.cjs · ui/ 悬浮窗前端
 web/     index.html · app.js 交互与 SSE · render.js 安全 Markdown/数学 · styles.css
 build/   icon.png · icon.ico · tray.png · trayTemplate.png（打包与托盘图标）
 scripts/ smoke.mjs（HTTP 冒烟）· desktop-smoke.mjs（Electron 冒烟）

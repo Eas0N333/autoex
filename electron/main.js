@@ -28,6 +28,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadConfig } from '../server/config.js';
 import { createEngine } from '../server/engine.js';
 import * as settingsStore from './settings.js';
+import { testConnection } from './probe.js';
 import { clearSource, listSources, selectSource } from './sources.js';
 
 /* ------------------------------------------------------------- constants -- */
@@ -94,6 +95,8 @@ let history = [];
 let lastRecognize = null;
 let recognizeChain = Promise.resolve();
 let boundsTimer = null;
+/** Aborts the previous `aqs:test-connection` run whenever a new one starts. */
+let probeController = null;
 
 const activeAnswers = new Map();
 const smoke = { answered: false, finished: false, timer: null };
@@ -1011,6 +1014,22 @@ function registerIpc() {
     broadcastState();
     refreshTray();
     return buildState();
+  });
+
+  handle('aqs:test-connection', async (_event, patch) => {
+    // Only the validated, unsaved patch is probed; it is never persisted or broadcast.
+    const clean = patch === undefined || patch === null ? {} : settingsStore.validatePatch(patch);
+    if (probeController) probeController.abort();
+    const controller = new AbortController();
+    probeController = controller;
+    try {
+      return await testConnection(current(), clean, { signal: controller.signal });
+    } catch (error) {
+      if (error?.name === 'AbortError') throw ipcError('ABORTED', '连接测试已取消');
+      throw error;
+    } finally {
+      if (probeController === controller) probeController = null;
+    }
   });
 
   handle('aqs:list-sources', async () => listSources({ excludeIds: [mediaSourceId()].filter(Boolean) }));
