@@ -59,6 +59,26 @@ export const CANDIDATE_SLOTS = 3;
 export const MAX_CANDIDATES = 5;
 export const NAME_MAX = 40;
 
+/** Cmd+Shift+Q is macOS Log Out, so macOS avoids Command-based global shortcuts. */
+const DEFAULT_HOTKEYS = process.platform === 'darwin'
+  ? Object.freeze({
+      toggle: 'Control+Shift+X',
+      scan: 'Control+Shift+S',
+      pause: 'Control+Shift+P',
+    })
+  : Object.freeze({
+      toggle: 'CommandOrControl+Shift+Q',
+      scan: 'CommandOrControl+Shift+S',
+      pause: 'CommandOrControl+Shift+P',
+    });
+
+/** Windows-era defaults that must migrate on macOS (Cmd+Shift+Q/S/P are system bindings). */
+const LEGACY_MAC_HOTKEYS = Object.freeze({
+  toggle: 'CommandOrControl+Shift+Q',
+  scan: 'CommandOrControl+Shift+S',
+  pause: 'CommandOrControl+Shift+P',
+});
+
 /** Slot defaults: three empty candidates plus the judge. */
 export const DEFAULT_SETTINGS = Object.freeze({
   ai: Object.freeze({
@@ -96,11 +116,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     collapsed: false,
     displayId: null,
   }),
-  hotkeys: Object.freeze({
-    toggle: 'CommandOrControl+Shift+Q',
-    scan: 'CommandOrControl+Shift+S',
-    pause: 'CommandOrControl+Shift+P',
-  }),
+  hotkeys: DEFAULT_HOTKEYS,
 });
 
 const MODEL_PATTERN = /^[A-Za-z0-9._:@/+-]{1,160}$/;
@@ -447,9 +463,26 @@ export function sanitizeSettings(raw) {
       displayId: nullableInt(overlay.displayId, 0, Number.MAX_SAFE_INTEGER),
     },
     hotkeys: {
-      toggle: normalizeAccelerator(hotkeys.toggle, DEFAULT_SETTINGS.hotkeys.toggle),
-      scan: normalizeAccelerator(hotkeys.scan, DEFAULT_SETTINGS.hotkeys.scan),
-      pause: normalizeAccelerator(hotkeys.pause, DEFAULT_SETTINGS.hotkeys.pause),
+      toggle: normalizeAccelerator(
+        // Old mac installs persisted the Windows defaults; on macOS those become
+        // Cmd+Shift+Q (Log Out), Cmd+Shift+S (Save As) and Cmd+Shift+P (Print).
+        process.platform === 'darwin' && hotkeys.toggle === LEGACY_MAC_HOTKEYS.toggle
+          ? undefined
+          : hotkeys.toggle,
+        DEFAULT_SETTINGS.hotkeys.toggle,
+      ),
+      scan: normalizeAccelerator(
+        process.platform === 'darwin' && hotkeys.scan === LEGACY_MAC_HOTKEYS.scan
+          ? undefined
+          : hotkeys.scan,
+        DEFAULT_SETTINGS.hotkeys.scan,
+      ),
+      pause: normalizeAccelerator(
+        process.platform === 'darwin' && hotkeys.pause === LEGACY_MAC_HOTKEYS.pause
+          ? undefined
+          : hotkeys.pause,
+        DEFAULT_SETTINGS.hotkeys.pause,
+      ),
     },
   };
 }
@@ -689,7 +722,7 @@ function validateHotkeysPatch(patch) {
     }
     const value = requireText(patch[key], `快捷键 ${key}`, 64);
     if (!HOTKEY_PATTERN.test(value) || !value.includes('+')) {
-      throw new SettingsError(`快捷键 ${key} 格式不正确，例如 CommandOrControl+Shift+Q`);
+      throw new SettingsError(`快捷键 ${key} 格式不正确，例如 ${DEFAULT_SETTINGS.hotkeys.toggle}`);
     }
     out[key] = value;
   }

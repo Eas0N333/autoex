@@ -26,6 +26,19 @@ function icoSizes(buffer) {
   return sizes;
 }
 
+function icnsTypes(buffer) {
+  const types = [];
+  let offset = 8;
+  while (offset + 8 <= buffer.length) {
+    const type = buffer.subarray(offset, offset + 4).toString('latin1');
+    const length = buffer.readUInt32BE(offset + 4);
+    if (length < 8 || offset + length > buffer.length) break;
+    types.push(type);
+    offset += length;
+  }
+  return types;
+}
+
 test('package.json keeps the HTTP scripts and adds the desktop ones', () => {
   assert.equal(pkg.main, 'electron/main.js');
   assert.equal(pkg.type, 'module');
@@ -38,8 +51,9 @@ test('package.json keeps the HTTP scripts and adds the desktop ones', () => {
 
   assert.equal(pkg.scripts.desktop, 'electron .');
   assert.equal(pkg.scripts['desktop:smoke'], 'node scripts/desktop-smoke.mjs');
-  assert.equal(pkg.scripts['pack:win'], 'electron-builder --win nsis portable');
-  assert.equal(pkg.scripts['pack:mac'], 'electron-builder --mac dmg zip');
+  assert.equal(pkg.scripts['pack:win'], 'electron-builder --win nsis portable --publish never');
+  assert.equal(pkg.scripts['pack:mac'], 'electron-builder --mac dmg zip --arm64 --publish never');
+  assert.equal(pkg.scripts['pack:mac:universal'], 'electron-builder --mac dmg zip --universal --publish never');
 });
 
 test('runtime dependencies stay empty and devDependencies are Electron only', () => {
@@ -59,8 +73,10 @@ test('packaged files whitelist is the contract set', () => {
     'web/render.js',
     'package.json',
     'build/icon.png',
+    'build/icon.icns',
     'build/tray.png',
     'build/trayTemplate.png',
+    'build/trayTemplate@2x.png',
   ]);
   for (const entry of files) {
     assert.ok(!/^(test|fixtures|docs|dist|scripts)\//.test(entry), `${entry} 不应被打包`);
@@ -76,11 +92,26 @@ test('builder targets cover Windows nsis+portable and macOS dmg+zip', () => {
   assert.equal(pkg.build.win.icon, 'build/icon.ico');
   assert.deepEqual(pkg.build.mac.target, ['dmg', 'zip']);
   assert.equal(pkg.build.mac.category, 'public.app-category.education');
-  assert.equal(pkg.build.mac.icon, 'build/icon.png');
+  assert.equal(pkg.build.mac.icon, 'build/icon.icns');
+  assert.equal(pkg.build.mac.minimumSystemVersion, '12.0');
+  assert.equal(pkg.build.mac.hardenedRuntime, true);
+  assert.equal(pkg.build.mac.gatekeeperAssess, false);
+  assert.equal(pkg.build.mac.entitlements, 'build/entitlements.mac.plist');
+  assert.equal(pkg.build.mac.entitlementsInherit, 'build/entitlements.mac.plist');
+  assert.equal(pkg.build.mac.artifactName, 'ai-quiz-solver-${version}-${arch}.${ext}');
+  assert.equal(pkg.build.mac.extendInfo.LSUIElement, true);
+  assert.equal(pkg.build.mac.extendInfo.NSHighResolutionCapable, true);
   assert.equal(
     pkg.build.mac.extendInfo.NSScreenCaptureUsageDescription,
     '需要屏幕录制权限以识别浏览器中的题目',
   );
+  assert.equal(
+    pkg.build.mac.extendInfo.NSAppleEventsUsageDescription,
+    '需要访问系统设置以打开屏幕录制权限面板',
+  );
+  assert.equal(pkg.build.mac.extendInfo.CFBundleDisplayName, 'AI 答题助手');
+  assert.equal(pkg.build.mac.extendInfo.LSApplicationCategoryType, 'public.app-category.education');
+  assert.equal(pkg.build.mac.extendInfo.NSHumanReadableCopyright, 'Copyright © 2026 AI 答题助手');
   assert.equal(pkg.build.nsis.oneClick, false);
   assert.equal(pkg.build.nsis.allowToChangeInstallationDirectory, true);
 });
@@ -88,9 +119,11 @@ test('builder targets cover Windows nsis+portable and macOS dmg+zip', () => {
 test('packaging icons exist with plausible dimensions', () => {
   const iconPng = `${rootDir}build/icon.png`;
   const iconIco = `${rootDir}build/icon.ico`;
+  const iconIcns = `${rootDir}build/icon.icns`;
   const trayPng = `${rootDir}build/tray.png`;
   const trayTemplate = `${rootDir}build/trayTemplate.png`;
-  for (const file of [iconPng, iconIco, trayPng, trayTemplate]) {
+  const trayTemplate2x = `${rootDir}build/trayTemplate@2x.png`;
+  for (const file of [iconPng, iconIco, trayPng, trayTemplate, trayTemplate2x, iconIcns]) {
     assert.ok(existsSync(file), `缺少图标 ${file}`);
     assert.ok(statSync(file).size > 200, `${file} 过小`);
   }
@@ -105,13 +138,21 @@ test('packaging icons exist with plausible dimensions', () => {
   assert.ok(widths.includes(256), 'icon.ico 必须包含 256x256');
   assert.ok(Math.max(...widths) <= 256, 'icon.ico 尺寸不得超过 256');
 
-  for (const [file, buffer] of [
-    ['build/tray.png', readFileSync(trayPng)],
-    ['build/trayTemplate.png', readFileSync(trayTemplate)],
-  ]) {
+  const icns = readFileSync(iconIcns);
+  assert.equal(icns.subarray(0, 4).toString('latin1'), 'icns', 'build/icon.icns 魔数必须是 icns');
+  assert.equal(icns.readUInt32BE(4), icns.length, 'build/icon.icns 头部长度必须与文件长度一致');
+  assert.equal(icnsTypes(icns).length >= 3, true, 'build/icon.icns 必须包含多个尺寸');
+  assert.ok(statSync(iconIcns).size > 1000, 'build/icon.icns 过小');
+
+  const traySizes = [
+    ['build/tray.png', readFileSync(trayPng), 32],
+    ['build/trayTemplate.png', readFileSync(trayTemplate), 16],
+    ['build/trayTemplate@2x.png', readFileSync(trayTemplate2x), 32],
+  ];
+  for (const [file, buffer, expected] of traySizes) {
     const size = pngDimensions(buffer, file);
-    assert.equal(size.width, 32, `${file} 宽度应为 32`);
-    assert.equal(size.height, 32, `${file} 高度应为 32`);
+    assert.equal(size.width, expected, `${file} 宽度应为 ${expected}`);
+    assert.equal(size.height, expected, `${file} 高度应为 ${expected}`);
   }
 });
 

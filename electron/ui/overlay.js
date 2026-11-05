@@ -38,6 +38,11 @@ const DETECT_MAX_WIDTH = 640;
 const FRAME_MAX_WIDTH = 1600;
 const FRAME_QUALITY = 0.82;
 const SCHEDULER_MS = 250;
+/** First-paint defaults before getState() arrives; mirrors settings.js per platform. */
+const MAC_RUNTIME = typeof navigator === 'object' && /mac/i.test(navigator.platform || '');
+const DEFAULT_HOTKEYS_RUNTIME = MAC_RUNTIME
+  ? { toggle: 'Control+Shift+X', scan: 'Control+Shift+S', pause: 'Control+Shift+P' }
+  : { toggle: 'CommandOrControl+Shift+Q', scan: 'CommandOrControl+Shift+S', pause: 'CommandOrControl+Shift+P' };
 
 const STYLE_LABELS = { concise: '简洁', detailed: '详细', step: '逐步' };
 const TYPE_LABELS = { choice: '选择题', blank: '填空题', short: '解答题', unknown: '题型未知' };
@@ -219,6 +224,7 @@ const els = {
   pickerList: $('source-list'),
   pickerStatus: $('source-status'),
   pickerEmpty: $('source-empty'),
+  pickerEmptyHint: $('source-empty-hint'),
   pickerPermission: $('btn-picker-permission'),
   refreshSources: $('btn-refresh-sources'),
   closePicker: $('btn-close-picker'),
@@ -273,9 +279,9 @@ function defaultSettings() {
     capture: { sourceId: null, sourceName: '' },
     overlay: { collapsed: false, width: 420 },
     hotkeys: {
-      toggle: 'CommandOrControl+Shift+Q',
-      scan: 'CommandOrControl+Shift+S',
-      pause: 'CommandOrControl+Shift+P',
+      toggle: DEFAULT_HOTKEYS_RUNTIME.toggle,
+      scan: DEFAULT_HOTKEYS_RUNTIME.scan,
+      pause: DEFAULT_HOTKEYS_RUNTIME.pause,
     },
   };
 }
@@ -487,7 +493,7 @@ function extractCode(error) {
   const match = /(?:code["']?\s*[:=]\s*["']?)([A-Z][A-Z0-9_]{2,})/.exec(message);
   if (match) return match[1];
   // IPC errors lose custom properties; the code often survives as a token.
-  const known = /\b(BAD_REQUEST|UNSUPPORTED|PAYLOAD_TOO_LARGE|RATE_LIMITED|UPSTREAM_ERROR|TIMEOUT|ABORTED|INTERNAL|NO_SOURCE|NO_BRIDGE|CAPTURE_DENIED|CAPTURE_UNSUPPORTED|CAPTURE_FAILED|SOURCE_CLOSED|FRAME_NOT_READY|EMPTY_QUESTION|SETTINGS_INVALID)\b/.exec(
+  const known = /\b(BAD_REQUEST|UNSUPPORTED|PAYLOAD_TOO_LARGE|RATE_LIMITED|UPSTREAM_ERROR|TIMEOUT|ABORTED|INTERNAL|NO_SOURCE|NO_BRIDGE|CAPTURE_DENIED|CAPTURE_UNSUPPORTED|CAPTURE_FAILED|SOURCE_CLOSED|SOURCE_NOT_FOUND|SOURCE_LIST_FAILED|FRAME_NOT_READY|EMPTY_QUESTION|SETTINGS_INVALID)\b/.exec(
     message,
   );
   if (known) return known[1];
@@ -1231,6 +1237,8 @@ function permissionLabel(permission) {
       return '已授权';
     case 'denied':
       return '未授权';
+    case 'not-determined':
+      return '未授权（首次选择窗口时询问）';
     case 'restricted':
       return '受系统限制';
     case 'not-darwin':
@@ -1240,13 +1248,27 @@ function permissionLabel(permission) {
   }
 }
 
+function pickerNeedsPermission() {
+  return state.app.platform === 'darwin' && state.screenPermission !== 'granted';
+}
+
+function syncPickerPermission() {
+  const needs = pickerNeedsPermission();
+  els.pickerPermission.hidden = !needs;
+  if (els.pickerEmptyHint) {
+    els.pickerEmptyHint.textContent = needs
+      ? '请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许本应用；授权后需重启应用，再刷新窗口列表。'
+      : '请确认目标浏览器窗口已打开且未最小化。';
+  }
+}
+
 function renderPermission() {
   const darwin = state.app.platform === 'darwin';
   els.permissionRow.hidden = !darwin;
   els.permissionStatus.textContent = permissionLabel(state.screenPermission);
   const denied = darwin && (state.screenPermission === 'denied' || state.screenPermission === 'restricted');
   els.permissionBanner.hidden = !denied;
-  els.pickerPermission.hidden = !darwin;
+  syncPickerPermission();
 }
 
 function updateCountdown() {
@@ -3234,8 +3256,11 @@ async function loadSources() {
   } catch (error) {
     const info = toUiError(error);
     els.pickerStatus.dataset.state = 'error';
-    els.pickerStatus.textContent = `${info.code}：${describeError(info.code, info)}`;
+    els.pickerStatus.textContent = pickerNeedsPermission()
+      ? `${info.code}：${info.message}`
+      : `${info.code}：${describeError(info.code, info)}`;
     els.pickerEmpty.hidden = false;
+    syncPickerPermission();
   } finally {
     els.refreshSources.disabled = false;
   }
@@ -3244,6 +3269,7 @@ async function loadSources() {
 function renderSources(sources) {
   els.pickerList.textContent = '';
   const list = sources.filter((source) => source && typeof source.id === 'string' && source.id);
+  const mac = state.app.platform === 'darwin';
   list.sort((left, right) => Number(Boolean(right.isBrowser)) - Number(Boolean(left.isBrowser)));
   const browsers = list.filter((source) => source.isBrowser).length;
 
@@ -3251,12 +3277,16 @@ function renderSources(sources) {
     els.pickerEmpty.hidden = false;
     els.pickerStatus.dataset.state = 'empty';
     els.pickerStatus.textContent = '没有找到可采集的窗口。';
+    syncPickerPermission();
     return;
   }
 
   els.pickerEmpty.hidden = true;
   els.pickerStatus.dataset.state = 'ready';
-  els.pickerStatus.textContent = `共 ${list.length} 个来源，其中 ${browsers} 个浏览器窗口（已置顶）。`;
+  // macOS window titles are the page title only, so browser detection is unreliable there.
+  els.pickerStatus.textContent = mac
+    ? `共 ${list.length} 个窗口。`
+    : `共 ${list.length} 个来源，其中 ${browsers} 个浏览器窗口（已置顶）。`;
 
   for (const source of list) {
     const card = document.createElement('button');
@@ -3288,7 +3318,7 @@ function renderSources(sources) {
 
     const tags = document.createElement('span');
     tags.className = 'source-tags';
-    if (source.isBrowser) {
+    if (source.isBrowser && !mac) {
       const tag = document.createElement('span');
       tag.className = 'chip chip-mini chip-accent';
       tag.textContent = '浏览器';

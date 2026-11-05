@@ -11,6 +11,54 @@ import { loadSettings, saveSettings } from './settings.js';
 
 export const THUMBNAIL_SIZE = Object.freeze({ width: 320, height: 200 });
 
+/**
+ * macOS (ScreenCaptureKit) can leave getSources pending forever while TCC is
+ * undecided, so the picker must fail with actionable copy instead of spinning.
+ */
+const SOURCE_TIMEOUT_MS = 8_000;
+
+function sourceListError(message) {
+  const error = new Error(message);
+  error.code = 'SOURCE_LIST_FAILED';
+  return error;
+}
+
+async function captureSources() {
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(sourceListError(
+        process.platform === 'darwin'
+          ? '读取窗口列表超时：请先在系统设置中允许本应用录屏，然后重启应用重试'
+          : '读取窗口列表超时，请稍后重试',
+      ));
+    }, SOURCE_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      desktopCapturer.getSources({
+        types: ['window', 'screen'],
+        thumbnailSize: { width: THUMBNAIL_SIZE.width, height: THUMBNAIL_SIZE.height },
+        fetchWindowIcons: false,
+      }),
+      timeout,
+    ]);
+  } catch (error) {
+    // Electron rejects with a bare string ("Failed to get sources.") on macOS
+    // when TCC is denied; give the renderer a stable code and actionable copy.
+    if (error?.code === 'SOURCE_LIST_FAILED') throw error;
+    const detail = typeof error === 'string' ? error : error?.message;
+    throw sourceListError(
+      process.platform === 'darwin'
+        ? `读取窗口列表失败${detail ? `（${detail}）` : ''}：请在系统设置中允许本应用录屏，然后重启应用重试`
+        : `读取窗口列表失败${detail ? `（${detail}）` : ''}，请稍后重试`,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Ordered so the picker can put browsers first. */
 const BROWSER_MATCHERS = Object.freeze([
   { label: 'Chrome', pattern: /google chrome|chromium|\bchrome\b/i },
@@ -102,11 +150,7 @@ function normalizeSource(source, kind) {
  */
 export async function listSources({ excludeIds = [] } = {}) {
   const excluded = new Set(excludeIds.filter(Boolean).map(String));
-  const raw = await desktopCapturer.getSources({
-    types: ['window', 'screen'],
-    thumbnailSize: { width: THUMBNAIL_SIZE.width, height: THUMBNAIL_SIZE.height },
-    fetchWindowIcons: false,
-  });
+  const raw = await captureSources();
 
   const sources = [];
   for (const source of raw ?? []) {

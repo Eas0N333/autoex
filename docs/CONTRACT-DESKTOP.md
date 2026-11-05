@@ -67,7 +67,9 @@ Event =
   style: 'concise',
   capture: { sourceId:null, sourceName:null },
   overlay: { width:420, x:null, y:null, height:null, collapsed:false, displayId:null },
-  hotkeys: { toggle:'CommandOrControl+Shift+Q', scan:'CommandOrControl+Shift+S', pause:'CommandOrControl+Shift+P' }
+  hotkeys: { toggle:'<平台默认>', scan:'<平台默认>', pause:'<平台默认>' }
+  // Windows: CommandOrControl+Shift+Q / +S / +P；macOS: Control+Shift+X / +S / +P
+  // macOS 不用 Cmd+Shift+Q（系统注销）；旧版 Windows 默认值在 macOS 上自动迁移，自定义值保留
 }
 ```
 
@@ -83,9 +85,10 @@ Event =
 - 位置：目标显示器 `workArea` 左边缘 + 12px，顶部 + 12px，高度 = workArea.height - 24；`x` 可拖拽后记忆（`settings.overlay.x/y/width/height`），越界或显示器消失时回落到默认左边缘。
 - `alwaysOnTop: 'screen-saver'`；`setVisibleOnAllWorkspaces(true,{visibleOnFullScreen:true})`（mac）；`setContentProtection(true)`；mac 隐藏 Dock（`app.dock.hide()`），Win 不占任务栏。
 - 折叠态：宽 56、高 96 的胶囊，位置仍贴左边缘；展开恢复记忆宽度。折叠状态持久化。
-- 托盘菜单：显示/隐藏、自动识别开关、自动解答开关、暂停/继续、打开日志目录、退出；图标随模式变色（demo 琥珀 / live 绿），打包资源 `build/tray.png`(32)、`build/trayTemplate.png`(mac 模板, 32)。
+- 托盘菜单：显示/隐藏、自动识别开关、自动解答开关、暂停/继续、打开日志目录、屏幕录制权限…（仅 macOS）、重启应用（仅 macOS）、退出。图标：Windows 用彩色 `build/tray.png`(32×32) 并随模式着色（demo 琥珀 / live 绿）；macOS 用黑白模板图 `build/trayTemplate.png`(16×16 @1x) + `build/trayTemplate@2x.png`(32×32 @2x)，经 `nativeImage.setTemplateImage(true)` 由系统菜单栏外观决定明暗，不做模式着色。
 - 全局快捷键 default：toggle/scan/pause；注册失败仅提示不崩溃。
-- 权限：Windows 无需额外授权；macOS 首次采集需要"屏幕录制"权限，`systemPreferences.getMediaAccessStatus('screen')` 上报；`openScreenPermission()` 打开 `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture`。
+- 权限：Windows 无需额外授权；macOS 首次窗口采集触发 TCC「屏幕录制」弹窗，`systemPreferences.getMediaAccessStatus('screen')` 上报状态；`openScreenPermission()` 打开 `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture`。打开设置或列出窗口后，主进程轮询该状态约 20 秒（每 2 秒一次），变为 `granted` 时发 `permission` 事件、广播状态并弹窗提示立即重启（`app.relaunch()`）；macOS 必须重启应用后新授权才生效。
+- macOS 便利项：`LSUIElement` 为 true 且启动时 `app.dock.hide()`，无 Dock 图标（纯菜单栏应用）；`Cmd+Q` 退出；安装 Application 级「编辑」菜单，保证 `Cmd+C/V/X/A` 等标准编辑快捷键可用（无菜单时 macOS 不响应这些组合键）。macOS 26+ 若菜单栏图标被系统隐藏，用户可在「系统设置 › 菜单栏」启用，`Cmd+Q` 与全局快捷键不受影响。
 - 退出时清理：`globalShortcut.unregisterAll()`、强杀 engine 流、保存窗口位置。
 - `app.on('window-all-closed')` 不退出（托盘常驻），除非显式 quit。
 
@@ -101,9 +104,9 @@ Event =
 listSources(): Promise<Source[]>   // Source = {id, name, kind:'window'|'screen', appIcon?:string, thumbnail?:string(dataURL 320px), isBrowser:boolean}
 selectSource(id): Promise<{ok, source?}>   // 校验 id 存在，写入 settings.capture
 ```
-- `desktopCapturer.getSources({types:['window','screen'], thumbnailSize:{width:320,height:200}, fetchWindowIcons:false})`。
+- `desktopCapturer.getSources({types:['window','screen'], thumbnailSize:{width:320,height:200}, fetchWindowIcons:false})`，整体 8 秒超时（macOS ScreenCaptureKit 在 TCC 未决时可能永久 pending），超时抛 `SOURCE_LIST_FAILED`。
 - 排除自身窗口（name 命中应用名/“AI 答题”），排除空标题，浏览器识别：Chrome/Edge/Firefox/Safari/Arc/Brave/Opera/360/QQ浏览器。
-- 浏览器源排前；缩略图 dataURL 仅供渲染层展示。
+- 浏览器源排前；缩略图 dataURL 仅供渲染层展示。macOS 窗口标题通常只有网页标题（不含应用名），浏览器识别不可靠：渲染层在 darwin 上不显示「浏览器」标签、不宣称浏览器置顶，只显示窗口总数。
 
 ## 5. IPC — `electron/preload.js` 暴露 `window.aqs`
 
@@ -166,7 +169,7 @@ export function hamming(a, b): number
 export function edgeDensity(canvasEl): number          // 0..1
 ```
 
-- `getUserMedia({audio:false, video:{mandatory:{chromeMediaSource:'desktop', chromeMediaSourceId: sourceId, maxWidth:1920, maxHeight:1200, maxFrameRate:10}}})`；失败抛中文可读错误（mac 权限 / 源已关闭）。
+- `getUserMedia({audio:false, video:{mandatory:{chromeMediaSource:'desktop', chromeMediaSourceId: sourceId, maxWidth:3840, maxHeight:2400, maxFrameRate:10}}})`；Retina 窗口按 2x 物理像素到达，保留上限避免在约束层先降采样、`drawFrame` 再降一次；失败抛中文可读错误（mac 权限 / 源已关闭）。
 - 帧：`maxWidth` 等比缩放，`crop` 为归一化矩形；JPEG dataURL。
 - 检测循环（overlay.js）：
   - 间隔 `auto.intervalMs`（默认 1500ms，允许 800–5000）。
@@ -189,7 +192,7 @@ export function edgeDensity(canvasEl): number          // 0..1
 - **历史**：抽屉列出最近 20 条（题目摘要/时间/学科），点击回填题目与答案，`清空`。
 - **设置抽屉**：API Base URL、Key（password + hasApiKey 提示）、文本/视觉模型、自动间隔、灵敏度、自动解答、裁剪编辑器（最近一帧 + 拖拽矩形，归一化保存）、mac 权限按钮。
 - **折叠胶囊**：仅显示状态点 + 快捷键提示，点击展开。
-- 选择窗口弹层：缩略图网格、浏览器置顶、`刷新列表`、无源时提示 mac 权限。
+- 选择窗口弹层：缩略图网格、浏览器置顶（Windows）、`刷新列表`；darwin 上未授权时隐藏浏览器标签、空列表改为提示「系统设置 › 隐私与安全性 › 屏幕录制」并显示授权按钮（已授权后隐藏该按钮）。
 
 约束：`id`/`data-testid` 固定（冒烟与 CDP 依赖）：`#status-dot`、`#btn-pick-source`、`#btn-scan`、`#btn-settings`、`#btn-collapse`、`#answer-md`、`#question-text`、`#source-name`、`#auto-enabled`、`#auto-answer`、`#btn-pause`、`[data-testid="source-picker"]`、`#toast`。CSP：`default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net data:; script-src 'self' https://cdn.jsdelivr.net; connect-src 'none'`（KaTeX 为可选增强，CDN 不可达时必须降级为可读 TeX 且不阻塞首屏）。
 
@@ -203,22 +206,30 @@ export function edgeDensity(canvasEl): number          // 0..1
   "start": "node server/index.js",
   "desktop": "electron .",
   "desktop:smoke": "node scripts/desktop-smoke.mjs",
-  "pack:win": "electron-builder --win nsis portable",
-  "pack:mac": "electron-builder --mac dmg zip"
+  "pack:win": "electron-builder --win nsis portable --publish never",
+  "pack:mac": "electron-builder --mac dmg zip --arm64 --publish never",
+  "pack:mac:universal": "electron-builder --mac dmg zip --universal --publish never"
 },
 "build": {
   "appId": "app.aiquiz.overlay",
   "productName": "AI 答题助手",
-  "files": ["electron/**/*", "server/**/*", "web/render.js", "package.json", "build/icon.png", "build/tray.png", "build/trayTemplate.png"],
+  "files": ["electron/**/*", "server/**/*", "web/render.js", "package.json", "build/icon.png", "build/icon.icns", "build/tray.png", "build/trayTemplate.png", "build/trayTemplate@2x.png"],
   "directories": { "output": "dist", "buildResources": "build" },
   "win": { "target": ["nsis","portable"], "icon": "build/icon.ico" },
-  "mac": { "target": ["dmg","zip"], "category": "public.app-category.education", "icon": "build/icon.png",
-           "extendInfo": { "NSAppleEventsUsageDescription": "…", "NSScreenCaptureUsageDescription": "需要屏幕录制权限以识别浏览器中的题目" } },
+  "mac": { "target": ["dmg","zip"], "category": "public.app-category.education", "icon": "build/icon.icns",
+           "hardenedRuntime": true, "gatekeeperAssess": false,
+           "entitlements": "build/entitlements.mac.plist", "entitlementsInherit": "build/entitlements.mac.plist",
+           "artifactName": "ai-quiz-solver-${version}-${arch}.${ext}",
+           "minimumSystemVersion": "12.0",
+           "extendInfo": { "LSUIElement": true, "NSHighResolutionCapable": true, "CFBundleDisplayName": "AI 答题助手",
+                           "NSScreenCaptureUsageDescription": "需要屏幕录制权限以识别浏览器中的题目",
+                           "NSAppleEventsUsageDescription": "需要访问系统设置以打开屏幕录制权限面板" } },
   "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
 }
 ```
 - `dependencies` 必须为空；打包不得包含 `test/`、`docs/`、`fixtures/`、`dist/`。
-- 图标：`build/icon.png` (1024), `build/icon.ico` (16–256), `build/tray.png` (32), `build/trayTemplate.png` (32, 黑白模板) 由 lead 提供，勿改文件名。
+- 图标：`build/icon.png` (1024)、`build/icon.icns`（mac 应用图标）、`build/icon.ico` (16–256)、`build/tray.png` (32×32 彩色)、`build/trayTemplate.png` (16×16 @1x) 与 `build/trayTemplate@2x.png` (32×32 @2x 模板) 由 lead 提供，勿改文件名；macOS 打包另需 `build/entitlements.mac.plist`。
+- macOS 产物命名 `ai-quiz-solver-<version>-<arch>.dmg/.zip`（arm64 或 universal），只能在 macOS 上构建；未签名、未公证，首次打开需右键「打开」或 `xattr -dr com.apple.quarantine`，Gatekeeper 仍可能告警。
 
 ## 9. 冒烟 — `scripts/desktop-smoke.mjs`
 
@@ -232,6 +243,7 @@ export function edgeDensity(canvasEl): number          // 0..1
 ## 10. 验证口径
 
 - `npm test` 全绿（新增 engine + packaging 用例，旧 37 项不得回归）。
-- `npm run desktop:smoke` → `DESKTOP SMOKE OK`。
-- 手工/自动：选择 Edge/Chrome 窗口 → 页面题目变化 → 自动识别 → 流式答案（demo 模式即可）；macOS 未实测需在 README 标注"依赖屏幕录制授权，未在 mac 机器验证"。
+- `npm run desktop:smoke` → `DESKTOP SMOKE OK`（Windows 与 macOS 均需通过）。
+- 手工/自动：选择 Edge/Chrome 窗口 → 页面题目变化 → 自动识别 → 流式答案（demo 模式即可）；macOS 首次采集先在系统弹窗授权「屏幕录制」，拒绝时用应用内「去授权」或托盘「屏幕录制权限…」，授权后重启应用。macOS 授权后已实测：窗口列表 10 项、选中窗口后 `capturing:true`、手动扫描识别出题目与 4 个选项、demo 答案流式返回；开发模式与打包版均通过。
+- macOS 打包验证（Apple Silicon 实测）：`npm run pack:mac` 产出 `dist/ai-quiz-solver-<version>-arm64.dmg/.zip`，`npm run pack:mac:universal` 产出 universal 同名产物；安装后确认菜单栏出现模板图标、无 Dock 图标、`Cmd+Q` 可退出。不记录体积指标。
 - 安全：密钥不出主进程、CSP 生效、IPC 入参校验、渲染进程无 Node、`setContentProtection` 开启、窗口截图不含悬浮窗自身。

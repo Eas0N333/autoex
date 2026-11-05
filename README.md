@@ -25,6 +25,7 @@ npm install        # 只安装开发依赖（electron + electron-builder），�
 npm run desktop    # 启动悬浮窗
 ```
 
+- 支持 Windows 与 macOS 12 及以上；macOS 已在 Apple Silicon（arm64）上完成适配与冒烟验证，安装包见下文「打包」。
 - 首次启动即为**演示模式**（内置示例题库，无需 Key），窗口顶部有"演示"徽标。
 - 切换在线模式：打开设置抽屉，填写 API Base URL / Key，再从下拉中选择文本模型与视觉模型。设置保存在系统 userData 目录（Windows `%APPDATA%\AI 答题助手\settings.json`，macOS `~/Library/Application Support/AI 答题助手/settings.json`）。
 - 调试用环境变量：`AQS_SETTINGS=<文件路径>` 覆盖设置文件位置，`AI_DEMO=1` 强制演示模式。
@@ -35,13 +36,19 @@ npm run desktop    # 启动悬浮窗
 2. 选好后自动开始截帧。题目变化 → 自动识别 → 自动解答（开关可关）；识别文本可编辑后重新提交。
 3. 需要立即取题时点「扫描一次」；答案卡底部显示耗时、是否命中缓存与字符数。
 
+托盘图标：Windows 使用 32×32 彩色 `build/tray.png`，并按模式着色（演示琥珀 / 在线绿）；macOS 使用黑白模板图 `build/trayTemplate.png`（16×16 @1x）与 `build/trayTemplate@2x.png`（32×32 @2x）随菜单栏外观自动适配深浅色，不做模式着色。
+
 ### 快捷键（默认值）
 
-| 快捷键 | 作用 |
+| Windows 快捷键 | 作用 |
 | --- | --- |
-| `Ctrl/Cmd+Shift+Q` | 显示 / 隐藏悬浮窗 |
-| `Ctrl/Cmd+Shift+S` | 立即扫描一次 |
-| `Ctrl/Cmd+Shift+P` | 暂停 / 继续自动识别 |
+| `Ctrl+Shift+Q` | 显示 / 隐藏悬浮窗 |
+| `Ctrl+Shift+S` | 立即扫描一次 |
+| `Ctrl+Shift+P` | 暂停 / 继续自动识别 |
+
+macOS 默认值为 `Control+Shift+X`（显示 / 隐藏）、`Control+Shift+S`（扫描）、`Control+Shift+P`（暂停）。自定义快捷键会保留；旧版本写入的 `CommandOrControl+Shift+Q`（macOS 上等于 `Cmd+Shift+Q`）会自动迁移为 `Control+Shift+X`，因为该组合会触发系统注销。
+
+macOS 下应用为菜单栏应用（`LSUIElement`，Dock 不显示图标）：`Cmd+Q` 退出，`Cmd+C/V/X/A` 等标准编辑快捷键由应用「编辑」菜单提供。macOS 26 起「系统设置 › 菜单栏」可控制第三方图标是否显示；若首次启动后看不到图标，请在该面板启用「AI 答题助手」，隐藏时仍可用全局快捷键与 `Cmd+Q`。
 
 ### 本地演示页（测试用）
 
@@ -108,18 +115,21 @@ Command Code 只需在「模型服务」填**一个订阅 Key**：候选与评�
 - 触发条件：16×16 感知哈希（dHash）变化超过灵敏度阈值、连续两帧稳定、非空白页，冷却时间 ≥4 秒；滚动/动画不会反复触发。
 - 悬浮窗开启内容保护（`setContentProtection`），不会截入它自己的画面；主进程不监听端口、不启动 HTTP 服务，直接复用 `server/` 引擎。
 - 密钥只存在主进程与本机设置文件里，不下发渲染进程、不写日志；渲染层只拿到 `hasApiKey` 布尔值。渲染进程 `sandbox` + `contextIsolation`，无 Node 权限，CSP 默认拒绝外连（仅 KaTeX 可选 CDN，加载失败自动降级为可读 TeX）。
-- Windows 无需额外授权；macOS 首次采集需要在「系统设置 → 隐私与安全性 → 屏幕录制」中授权本应用，应用内会提示并提供直达按钮。
+- Windows 无需额外授权。macOS 首次采集窗口会触发系统 TCC 授权弹窗；若被拒绝，可用应用内「去授权 / 打开系统设置」按钮或托盘「屏幕录制权限…」菜单直达「系统设置 → 隐私与安全性 → 屏幕录制」，授权后必须**重启应用**（macOS 要求重启后才生效）。打开设置或列出窗口后，应用会用 `getMediaAccessStatus('screen')` 轮询约 20 秒，一旦授权成功立即提示重启。窗口列表读取带 8 秒超时，TCC 未决时不会无限转圈，而是给出授权指引。
 
 ### 打包
 
 ```bash
-npm run pack:win   # Windows：nsis 安装包 + portable 免安装版 → dist/
-npm run pack:mac   # macOS：dmg + zip → dist/（必须在 macOS 上执行，Windows 不能构建 dmg）
+npm run pack:win           # Windows：nsis 安装包 + portable 免安装版 → dist/
+npm run pack:mac           # macOS arm64：dmg + zip → dist/
+npm run pack:mac:universal # macOS 通用二进制：dmg + zip → dist/
 ```
 
-- 打包内容为白名单：`electron/**/*`、`server/**/*`、`web/render.js`、`package.json`、`build/icon.png`、`build/tray.png`、`build/trayTemplate.png`；`test/`、`docs/`、`fixtures/`、`dist/` 不会进入安装包。
+- 打包内容为白名单：`electron/**/*`、`server/**/*`、`web/render.js`、`package.json`、`build/icon.png`、`build/icon.icns`、`build/tray.png`、`build/trayTemplate.png`、`build/trayTemplate@2x.png`；`test/`、`docs/`、`fixtures/`、`dist/` 不会进入安装包。
 - Windows 已在开发机实测：`npx electron-builder --win dir` 产出 `dist/win-unpacked/AI 答题助手.exe`（已用 `--smoke` 启动验证），`npm run pack:win` 产出 `dist/AI 答题助手 Setup 1.0.0.exe`（98 MB，NSIS，可选安装目录）与免安装 `dist/AI 答题助手 1.0.0.exe`（90 MB）。未配置代码签名，SmartScreen 会提示"未知发布者"，可选「更多信息 → 仍要运行」。
-- macOS 构建与运行**未在 mac 机器上实测**（Windows 无法交叉构建 dmg）：`npm run pack:mac` 必须在真实 macOS 上执行，产物为 `dist/*.dmg` 与 `dist/*.zip`；未签名包首次打开需右键「打开」以通过 Gatekeeper。
+- macOS 已在 Apple Silicon（arm64）上完成适配，并实测 dmg 挂载、zip 解压与 universal 产物启动冒烟：`npm run pack:mac` 产出 arm64 的 `dist/ai-quiz-solver-<version>-arm64.dmg` 与 `.zip`，`npm run pack:mac:universal` 产出 `dist/ai-quiz-solver-<version>-universal.dmg` 与 `.zip`（同时包含 x86_64 与 arm64）。构建只能在 macOS 上执行（不能在 Windows 交叉构建 dmg）；Electron 二进制下载慢时可先设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`。
+- macOS 构建配置：`mac.icon` 为 `build/icon.icns`，`hardenedRuntime` 开启并配套 `build/entitlements.mac.plist`，`LSUIElement` 为 true（纯菜单栏应用，无 Dock 图标），`minimumSystemVersion` 为 12.0。
+- macOS 包未签名、未公证：安装后首次打开需在 Finder 中右键 →「打开」，或执行 `xattr -dr com.apple.quarantine "/Applications/AI 答题助手.app"`；Gatekeeper 仍可能提示警告。
 
 ## 网页版快速开始
 
@@ -201,7 +211,7 @@ server/  config.js 配置 · provider.js 模型客户端（live/demo）· recogn
          engine.js 主进程/HTTP 共用的引擎 · ensemble.js 三模型并行 + 评审 · config.js 配置
 electron/ main.js 窗口/托盘/快捷键 · probe.js 连接自检 · settings.js 配置与密钥掩码 · model-catalog.js 内置模型目录（下拉选项）· sources.js 窗口源 · preload.cjs · ui/ 悬浮窗前端
 web/     index.html · app.js 交互与 SSE · render.js 安全 Markdown/数学 · styles.css
-build/   icon.png · icon.ico · tray.png · trayTemplate.png（打包与托盘图标）
+build/   icon.png · icon.icns · icon.ico · tray.png · trayTemplate.png · trayTemplate@2x.png · entitlements.mac.plist（打包、托盘图标与签名配置）
 scripts/ smoke.mjs（HTTP 冒烟）· desktop-smoke.mjs（Electron 冒烟）· demo-page.mjs（本地练习页）
 demo/    quiz.html 本地练习页
 test/    node:test 套件 + OpenAI 兼容 stub

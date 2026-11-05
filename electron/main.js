@@ -10,6 +10,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   nativeImage,
@@ -56,7 +57,14 @@ const MIN_HEIGHT = 420;
 const MAX_IMAGE_CHARS = 16 * 1024 * 1024;
 const RECOGNIZE_DEDUPE_MS = 10_000;
 const HISTORY_LIMIT = 20;
+/** macOS only: the TCC screen-capture dialog can stay open for a few seconds. */
+const PERMISSION_POLL_INTERVAL_MS = 2_000;
+const PERMISSION_POLL_ATTEMPTS = 10;
 const STYLES = settingsStore.STYLES;
+
+/** macOS TCC state that must not survive a cleanup. */
+let permissionTimer = null;
+let permissionRestartPrompted = false;
 
 /** Neutral 32x32 PNG used when build/tray.png is missing from the package. */
 const FALLBACK_TRAY_PNG =
@@ -540,7 +548,9 @@ function trayImage(mode) {
   }
   if (base.isEmpty()) return base;
   if (process.platform === 'darwin') {
-    const template = base.resize({ width: 16, height: 16 });
+    // build/trayTemplate.png is 16x16 with a 32x32 @2x sibling; createFromPath
+    // keeps both reps, so never resize it (that would drop the retina rep).
+    const template = asset ? base : base.resize({ width: 16, height: 16 });
     template.setTemplateImage(true);
     return template;
   }
@@ -608,7 +618,16 @@ function refreshTray() {
     { type: 'separator' },
     { label: '打开日志目录', click: () => openLogDirectory() },
     ...(process.platform === 'darwin'
-      ? [{ label: '屏幕录制权限…', click: () => openScreenPermission() }]
+      ? [
+          { label: '屏幕录制权限…', click: () => openScreenPermission() },
+          {
+            label: '重启应用',
+            click: () => {
+              app.relaunch();
+              quitApp();
+            },
+          },
+        ]
       : []),
     { type: 'separator' },
     { label: '退出', click: () => quitApp() },
@@ -668,10 +687,74 @@ function sendCommand(command) {
 
 /* -------------------------------------------------------------- permission -- */
 
+function stopPermissionWatch() {
+  if (!permissionTimer) return;
+  clearInterval(permissionTimer);
+  permissionTimer = null;
+}
+
+/** macOS only: new screen-capture grants need a fresh process to take effect. */
+function offerPermissionRestart() {
+  if (SMOKE || permissionRestartPrompted || quitting) return;
+  permissionRestartPrompted = true;
+  const options = {
+    type: 'info',
+    title: '屏幕录制权限已开启',
+    message: '屏幕录制权限已开启',
+    detail: 'macOS 需要重启应用后，屏幕录制权限才会生效。',
+    buttons: ['立即重启', '稍后'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  };
+  const parent = win && !win.isDestroyed() && win.isVisible() ? win : null;
+  const show = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+  show
+    .then(({ response }) => {
+      if (response === 0) {
+        app.relaunch();
+        quitApp();
+        return;
+      }
+      toast('info', '屏幕录制权限已开启，重启应用后生效');
+    })
+    .catch((error) => log('重启提示失败：', error?.message ?? error));
+}
+
+/**
+ * Polls the TCC state for ~20s after the user is sent to System Settings or
+ * lists windows. The system dialog can stay open, so one snapshot is not enough.
+ */
+function watchScreenPermission() {
+  if (process.platform !== 'darwin' || SMOKE || quitting) return;
+  if (permissionTimer) return;
+  if (screenPermission() === 'granted') return;
+  let attempts = 0;
+  let last = screenPermission();
+  permissionTimer = setInterval(() => {
+    attempts += 1;
+    const status = screenPermission();
+    if (status !== last) {
+      last = status;
+      emit({ type: 'permission', screen: status });
+      broadcastState();
+    }
+    if (status === 'granted') {
+      stopPermissionWatch();
+      offerPermissionRestart();
+      return;
+    }
+    if (attempts >= PERMISSION_POLL_ATTEMPTS) stopPermissionWatch();
+  }, PERMISSION_POLL_INTERVAL_MS);
+  permissionTimer.unref?.();
+}
+
 function openScreenPermission() {
   if (process.platform !== 'darwin') return;
+  watchScreenPermission();
   shell
     .openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
+    .then(() => toast('info', '请在系统设置中允许本应用，授权后重启应用生效'))
     .catch((error) => toast('error', `无法打开系统设置：${error?.message ?? error}`));
 }
 
@@ -1032,7 +1115,11 @@ function registerIpc() {
     }
   });
 
-  handle('aqs:list-sources', async () => listSources({ excludeIds: [mediaSourceId()].filter(Boolean) }));
+  handle('aqs:list-sources', async () => {
+    // getSources triggers the macOS TCC prompt; watch it so a grant is not lost.
+    if (process.platform === 'darwin' && screenPermission() !== 'granted') watchScreenPermission();
+    return listSources({ excludeIds: [mediaSourceId()].filter(Boolean) });
+  });
 
   handle('aqs:select-source', async (_event, id) => {
     const sourceId = asString(id, '窗口 ID', { max: 512 });
@@ -1250,12 +1337,31 @@ async function runSmokeReady() {
 
 /* ------------------------------------------------------------------ lifecycle -- */
 
+/**
+ * macOS needs an application menu even for an LSUIElement app: the Edit roles
+ * are what wire Cmd+C/V/X/A/Z inside the frameless settings form.
+ */
+function installMacMenu() {
+  if (process.platform !== 'darwin') return;
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    { role: 'windowMenu' },
+  ]));
+  app.setAboutPanelOptions({
+    applicationName: APP_NAME,
+    applicationVersion: app.getVersion(),
+    copyright: `Copyright © ${new Date().getFullYear()} ${APP_NAME}`,
+  });
+}
+
 function cleanup() {
   quitting = true;
   if (cleanedUp) return;
   cleanedUp = true;
   clearTimeout(boundsTimer);
   clearTimeout(smoke.timer);
+  stopPermissionWatch();
   smoke.timer = null;
   abortAllAnswers();
   try {
@@ -1288,7 +1394,10 @@ function startSmokeTimeout() {
 async function boot() {
   app.setName(APP_NAME);
   if (process.platform === 'win32') app.setAppUserModelId(PRODUCT_ID);
-  if (process.platform === 'darwin' && app.dock) app.dock.hide();
+  if (process.platform === 'darwin') {
+    installMacMenu();
+    if (app.dock) app.dock.hide();
+  }
 
   settingsStore.cleanupTempFiles();
   currentSettings = settingsStore.loadSettings();

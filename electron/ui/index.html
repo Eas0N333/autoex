@@ -52,7 +52,7 @@
       <button id="collapse-pill" class="pill" type="button" data-testid="collapse-pill" aria-label="展开 AI 答题悬浮窗">
         <span class="pill-inner">
           <span id="pill-dot" class="pill-dot" aria-hidden="true" data-state="idle"></span>
-          <span id="pill-hint" class="pill-hint">Ctrl+Shift+Q</span>
+          <span id="pill-hint" class="pill-hint"></span>
         </span>
       </button>
 
@@ -401,7 +401,7 @@
         <div id="source-list" class="source-grid"></div>
         <div id="source-empty" class="modal-empty" hidden>
           <p>没有找到可采集的窗口。</p>
-          <p class="field-hint">请确认目标浏览器窗口已打开且未最小化。</p>
+          <p class="field-hint" id="source-empty-hint">请确认目标浏览器窗口已打开且未最小化。</p>
           <button id="btn-picker-permission" class="ghost-btn small" type="button" hidden>打开屏幕录制设置</button>
         </div>
         <footer class="modal-foot">

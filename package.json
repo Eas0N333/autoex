@@ -15,9 +15,10 @@
     "smoke": "node scripts/smoke.mjs",
     "desktop": "electron .",
     "desktop:smoke": "node scripts/desktop-smoke.mjs",
-    "pack:win": "electron-builder --win nsis portable",
-    "pack:mac": "electron-builder --mac dmg zip",
-    "demo:page": "node scripts/demo-page.mjs"
+    "pack:win": "electron-builder --win nsis portable --publish never",
+    "pack:mac": "electron-builder --mac dmg zip --arm64 --publish never",
+    "demo:page": "node scripts/demo-page.mjs",
+    "pack:mac:universal": "electron-builder --mac dmg zip --universal --publish never"
   },
   "devDependencies": {
     "electron": "^38.8.6",
@@ -32,8 +33,10 @@
       "web/render.js",
       "package.json",
       "build/icon.png",
+      "build/icon.icns",
       "build/tray.png",
-      "build/trayTemplate.png"
+      "build/trayTemplate.png",
+      "build/trayTemplate@2x.png"
     ],
     "directories": {
       "output": "dist",
@@ -52,11 +55,22 @@
         "zip"
       ],
       "category": "public.app-category.education",
-      "icon": "build/icon.png",
+      "icon": "build/icon.icns",
+      "minimumSystemVersion": "12.0",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
+        "NSScreenCaptureUsageDescription": "需要屏幕录制权限以识别浏览器中的题目",
+        "LSUIElement": true,
+        "NSHighResolutionCapable": true,
         "NSAppleEventsUsageDescription": "需要访问系统设置以打开屏幕录制权限面板",
-        "NSScreenCaptureUsageDescription": "需要屏幕录制权限以识别浏览器中的题目"
-      }
+        "LSApplicationCategoryType": "public.app-category.education",
+        "CFBundleDisplayName": "AI 答题助手",
+        "NSHumanReadableCopyright": "Copyright © 2026 AI 答题助手"
+      },
+      "artifactName": "ai-quiz-solver-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

@@ -111,8 +111,10 @@ export async function startCapture(sourceId, videoEl) {
         mandatory: {
           chromeMediaSource: 'desktop',
           chromeMediaSourceId: sourceId,
-          maxWidth: 1920,
-          maxHeight: 1200,
+          // Retina windows arrive at 2x logical pixels; leave headroom so the
+          // single drawFrame downscale to 1600px is the only resample.
+          maxWidth: 3840,
+          maxHeight: 2400,
           maxFrameRate: 10,
         },
       },
