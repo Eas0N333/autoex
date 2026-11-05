@@ -1216,6 +1216,18 @@ function renderBusy() {
   els.stop.hidden = !state.streaming;
 }
 
+/** Compact accelerator for the 56px pill, e.g. Ctrl+Shift+Q -> Ctrl⇧Q. */
+function compactHotkey(accelerator) {
+  if (!accelerator) return '';
+  const mac = state.app?.platform === 'darwin';
+  return String(accelerator)
+    .replace(/CommandOrControl|CmdOrCtrl|Command|Control/g, mac ? '⌘' : 'Ctrl')
+    .replace(/Shift/g, '⇧')
+    .replace(/Alt|Option/g, mac ? '⌥' : 'Alt')
+    .replace(/\+/g, '')
+    .replace(/\s+/g, '');
+}
+
 function renderCollapsed() {
   const collapsed = Boolean(state.collapsed);
   state.settings.overlay.collapsed = collapsed;
@@ -1225,7 +1237,7 @@ function renderCollapsed() {
   document.body.dataset.collapsed = String(collapsed);
   els.pill.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   const hotkey = hotkeyLabel(state.settings.hotkeys.toggle);
-  els.pillHint.textContent = hotkey;
+  els.pillHint.textContent = compactHotkey(hotkey);
   els.pillHint.title = `展开快捷键：${state.settings.hotkeys.toggle}`;
   els.pill.title = `展开 AI 答题悬浮窗（${hotkey}）`;
   els.pill.setAttribute('aria-label', `展开 AI 答题悬浮窗（${hotkey}）`);

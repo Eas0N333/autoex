@@ -25,6 +25,11 @@
   --border: #dce3ee;
   --border-strong: #c6d0e0;
   --shadow: 0 10px 28px rgba(16, 28, 54, 0.14);
+  --glass-bg: linear-gradient(155deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.22) 55%, rgba(255, 255, 255, 0.38));
+  --glass-border: rgba(255, 255, 255, 0.58);
+  --glass-highlight: rgba(255, 255, 255, 0.95);
+  --glass-shade: rgba(120, 140, 180, 0.18);
+  --glass-shadow: 0 14px 34px rgba(12, 24, 48, 0.22);
   --radius: 14px;
   --radius-sm: 10px;
   --radius-xs: 7px;
@@ -152,6 +157,7 @@ button {
 }
 
 .panel {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -159,9 +165,19 @@ button {
   overflow: hidden;
   background: var(--panel-bg);
   border: 1px solid var(--border);
-  border-left: none;
-  border-radius: 0 18px 18px 0;
+  border-radius: 20px;
   box-shadow: var(--shadow);
+}
+
+.panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.18);
 }
 
 .app[data-collapsed="true"] .panel {
@@ -186,6 +202,7 @@ button {
 }
 
 .pill-inner {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -193,19 +210,48 @@ button {
   gap: 5px;
   width: 100%;
   padding: 10px 3px;
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: 26px;
-  box-shadow: var(--shadow);
+  overflow: hidden;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 28px;
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(24px) saturate(190%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
   transition:
     border-color 0.16s ease,
     box-shadow 0.16s ease,
     transform 0.12s ease;
 }
 
+/* liquid-glass specular highlight + bottom rim */
+.pill-inner::before {
+  content: "";
+  position: absolute;
+  inset: 1px 1px auto;
+  height: 48%;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+
+.pill-inner::after {
+  content: "";
+  position: absolute;
+  inset: auto 4px 3px;
+  height: 22%;
+  border-radius: inherit;
+  background: radial-gradient(120% 100% at 50% 100%, rgba(255, 255, 255, 0.3), transparent 70%);
+  pointer-events: none;
+}
+
 .pill:hover .pill-inner {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow);
+  border-color: var(--glass-highlight);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.28);
+  transform: translateY(-1px);
 }
 
 .pill:active .pill-inner {
@@ -243,6 +289,7 @@ button {
   color: var(--accent-strong);
   text-align: center;
   white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 .pill-dot {
@@ -274,13 +321,25 @@ button {
 
 .pill-hint {
   font-size: 8px;
-  line-height: 1.45;
-  color: var(--text-faint);
+  line-height: 1.35;
+  letter-spacing: -0.1px;
+  white-space: nowrap;
+  color: var(--text-muted);
   text-align: center;
   max-width: 100%;
   padding: 0 1px;
   overflow-wrap: normal;
   word-break: normal;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  .pill-label {
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  }
+  .pill-hint {
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+  }
 }
 
 @keyframes pill-nudge {
