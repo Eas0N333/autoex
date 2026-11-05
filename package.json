@@ -1,0 +1,65 @@
+{
+  "name": "ai-quiz-solver",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Online question recognition + AI answering system (zero-dependency Node server, zero-build web UI)",
+  "type": "module",
+  "main": "electron/main.js",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "smoke": "node scripts/smoke.mjs",
+    "desktop": "electron .",
+    "desktop:smoke": "node scripts/desktop-smoke.mjs",
+    "pack:win": "electron-builder --win nsis portable",
+    "pack:mac": "electron-builder --mac dmg zip"
+  },
+  "devDependencies": {
+    "electron": "^38.8.6",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "app.aiquiz.overlay",
+    "productName": "AI 答题助手",
+    "files": [
+      "electron/**/*",
+      "server/**/*",
+      "web/render.js",
+      "package.json",
+      "build/icon.png",
+      "build/tray.png",
+      "build/trayTemplate.png"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.education",
+      "icon": "build/icon.png",
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "需要访问系统设置以打开屏幕录制权限面板",
+        "NSScreenCaptureUsageDescription": "需要屏幕录制权限以识别浏览器中的题目"
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

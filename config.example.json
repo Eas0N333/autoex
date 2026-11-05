@@ -1,0 +1,61 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "demo": false,
+  "ai": {
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKey": "",
+    "model": "gpt-4o-mini",
+    "visionModel": "gpt-4o-mini",
+    "timeoutMs": 60000,
+    "maxRetries": 1,
+    "headers": {},
+    "vision": {
+      "baseUrl": "",
+      "apiKey": "",
+      "model": ""
+    },
+    "ensemble": {
+      "enabled": false,
+      "candidates": [
+        {
+          "name": "模型 A",
+          "baseUrl": "",
+          "apiKey": "",
+          "model": "",
+          "temperature": 0.3
+        },
+        {
+          "name": "模型 B",
+          "baseUrl": "",
+          "apiKey": "",
+          "model": "",
+          "temperature": 0.6
+        },
+        {
+          "name": "模型 C",
+          "baseUrl": "",
+          "apiKey": "",
+          "model": "",
+          "temperature": 0.9
+        }
+      ],
+      "judge": {
+        "name": "评审",
+        "baseUrl": "",
+        "apiKey": "",
+        "model": "",
+        "temperature": 0.1
+      }
+    }
+  },
+  "limits": {
+    "maxBodyBytes": 12582912,
+    "maxImageBytes": 8388608,
+    "maxQuestionChars": 8000,
+    "maxOptions": 10,
+    "ratePerMinute": 40,
+    "answerCacheTtlMs": 600000,
+    "maxCacheEntries": 200
+  }
+}

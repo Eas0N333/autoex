@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net data:; script-src 'self' https://cdn.jsdelivr.net; connect-src 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 答题助手</title>
+    <link rel="stylesheet" href="overlay.css" />
+  </head>
+  <body>
+    <svg class="sprite" aria-hidden="true" focusable="false">
+      <symbol id="i-chevron-left" viewBox="0 0 24 24">
+        <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      </symbol>
+      <symbol id="i-chevron-down" viewBox="0 0 24 24">
+        <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      </symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24">
+        <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l1.7-1.3-1.9-3.3-2 .8a7.7 7.7 0 0 0-2.6-1.5L14.2 3H9.8l-.4 2.2a7.7 7.7 0 0 0-2.6 1.5l-2-.8-1.9 3.3 1.7 1.3a7.6 7.6 0 0 0 0 3l-1.7 1.3 1.9 3.3 2-.8a7.7 7.7 0 0 0 2.6 1.5l.4 2.2h4.4l.4-2.2a7.7 7.7 0 0 0 2.6-1.5l2 .8 1.9-3.3-1.7-1.3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      </symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="1.8" />
+        <path d="M12 7.6V12l3.1 1.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      </symbol>
+      <symbol id="i-monitor" viewBox="0 0 24 24">
+        <rect x="3" y="4.5" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" />
+        <path d="M9 20h6M12 16.5V20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      </symbol>
+      <symbol id="i-scan" viewBox="0 0 24 24">
+        <path d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        <circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8" />
+      </symbol>
+      <symbol id="i-x" viewBox="0 0 24 24">
+        <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      </symbol>
+    </svg>
+
+    <div id="no-bridge" class="no-bridge" hidden>
+      <div class="no-bridge-card">
+        <span class="no-bridge-mark">AI</span>
+        <h1>请通过桌面应用启动</h1>
+        <p>悬浮窗需要 Electron 主进程提供的桌面接口（<code>window.aqs</code>）。直接打开网页时无法采集窗口画面，也无法调用识别与解答。</p>
+        <p class="no-bridge-hint">在项目目录运行 <code>npm run desktop</code>，或使用安装包启动「AI 答题助手」。</p>
+      </div>
+    </div>
+
+    <div id="app" class="app" data-collapsed="false" data-ready="false">
+      <button id="collapse-pill" class="pill" type="button" data-testid="collapse-pill" aria-label="展开 AI 答题悬浮窗">
+        <span class="pill-inner">
+          <span id="pill-dot" class="pill-dot" aria-hidden="true" data-state="idle"></span>
+          <span id="pill-hint" class="pill-hint">Ctrl+Shift+Q</span>
+        </span>
+      </button>
+
+      <div id="panel" class="panel">
+        <header class="header">
+          <span id="status-dot" class="status-dot" data-state="idle" role="img" aria-label="状态：待命"></span>
+          <div class="brand">
+            <span class="brand-title">AI 答题</span>
+            <span id="status-text" class="brand-sub">待命</span>
+          </div>
+          <span id="mode-badge" class="badge" data-mode="demo">演示模式</span>
+          <div class="header-actions">
+            <button id="btn-history" class="icon-btn" type="button" title="历史记录" aria-label="历史记录">
+              <svg class="icon"><use href="#i-clock"></use></svg>
+            </button>
+            <button id="btn-settings" class="icon-btn" type="button" title="设置" aria-label="设置">
+              <svg class="icon"><use href="#i-gear"></use></svg>
+            </button>
+            <button id="btn-collapse" class="icon-btn" type="button" title="折叠悬浮窗" aria-label="折叠悬浮窗">
+              <svg class="icon"><use href="#i-chevron-left"></use></svg>
+            </button>
+          </div>
+        </header>
+
+        <div id="inline-error" class="inline-error" role="alert" hidden>
+          <span id="inline-error-code" class="error-code">ERROR</span>
+          <span id="inline-error-text" class="error-text">操作失败。</span>
+          <button id="btn-dismiss-error" class="icon-btn tiny" type="button" aria-label="关闭错误提示">
+            <svg class="icon"><use href="#i-x"></use></svg>
+          </button>
+        </div>
+
+        <div id="permission-banner" class="banner" hidden>
+          <span>macOS 需要屏幕录制权限才能采集窗口画面。</span>
+          <button id="btn-banner-permission" class="ghost-btn small" type="button">去授权</button>
+        </div>
+
+        <main id="scroller" class="scroller">
+          <section class="card source-card">
+            <div class="source-main">
+              <span class="card-eyebrow">采集窗口</span>
+              <span id="source-name" class="source-title">未选择窗口</span>
+              <span id="source-hint" class="source-hint">选择浏览器窗口后开始自动识别</span>
+            </div>
+            <div class="source-actions">
+              <button id="btn-pick-source" class="primary-btn" type="button">
+                <svg class="icon"><use href="#i-monitor"></use></svg><span>选择浏览器窗口</span>
+              </button>
+              <button id="btn-scan" class="ghost-btn" type="button">
+                <svg class="icon"><use href="#i-scan"></use></svg><span>扫描一次</span>
+              </button>
+              <button id="btn-clear-source" class="icon-btn" type="button" aria-label="清除窗口选择" title="清除窗口选择" hidden>
+                <svg class="icon"><use href="#i-x"></use></svg>
+              </button>
+            </div>
+          </section>
+
+          <section id="question-card" class="card question-card">
+            <header class="card-head">
+              <h2 class="card-title">题目</h2>
+              <div class="chips">
+                <span id="question-subject" class="chip" hidden></span>
+                <span id="question-type" class="chip" hidden></span>
+                <span id="question-confidence" class="chip chip-quiet" hidden></span>
+              </div>
+              <button id="btn-toggle-question" class="icon-btn tiny" type="button" aria-label="收起题目" aria-expanded="true">
+                <svg class="icon"><use href="#i-chevron-down"></use></svg>
+              </button>
+            </header>
+            <div class="question-body">
+              <textarea id="question-text" class="question-text" rows="3" spellcheck="false" placeholder="识别到的题目会显示在这里，也可以手动输入…"></textarea>
+              <ul id="question-options" class="option-list" hidden></ul>
+            </div>
+            <footer class="card-foot">
+              <button id="btn-save-question" class="ghost-btn small" type="button">保存修改</button>
+              <button id="btn-rerecognize" class="ghost-btn small" type="button">重新识别</button>
+              <button id="btn-submit" class="primary-btn small" type="button" data-testid="submit">解答</button>
+            </footer>
+          </section>
+
+          <section id="answer-card" class="card answer-card">
+            <header class="card-head">
+              <h2 class="card-title">答案</h2>
+              <div id="style-switch" class="segmented" role="group" aria-label="解答风格">
+                <button type="button" data-style="concise" aria-pressed="true">简洁</button>
+                <button type="button" data-style="detailed" aria-pressed="false">详细</button>
+                <button type="button" data-style="step" aria-pressed="false">逐步</button>
+              </div>
+              <div class="chips">
+                <span id="answer-cached" class="chip chip-accent" hidden></span>
+                <span id="answer-duration" class="chip chip-quiet" hidden></span>
+                <span id="answer-model" class="chip chip-quiet" hidden></span>
+              </div>
+            </header>
+            <div class="answer-body">
+              <div id="ensemble-panel" class="ensemble-panel" data-testid="candidates" hidden>
+                <div class="ensemble-head">
+                  <span id="ensemble-summary" class="ensemble-summary"></span>
+                  <span id="ensemble-judge" class="chip chip-quiet" hidden></span>
+                </div>
+                <ol id="candidate-list" class="candidate-list"></ol>
+              </div>
+              <div id="answer-empty" class="answer-empty">识别题目后，答案将在这里流式显示。</div>
+              <div id="answer-md" class="answer-md" role="region" aria-live="polite" aria-atomic="false" aria-busy="false"></div>
+            </div>
+            <footer class="card-foot">
+              <span id="answer-chars" class="foot-note">0 字</span>
+              <div class="foot-actions">
+                <button id="btn-copy" class="ghost-btn small" type="button" data-testid="copy">复制</button>
+                <button id="btn-stop" class="ghost-btn small danger" type="button" data-testid="stop" hidden>停止</button>
+              </div>
+            </footer>
+          </section>
+        </main>
+
+        <footer class="auto-bar">
+          <div class="auto-row">
+            <label class="switch-row compact">
+              <span class="switch"><input id="auto-enabled" type="checkbox" checked /><span class="switch-track" aria-hidden="true"></span></span>
+              <span class="switch-label">自动识别</span>
+            </label>
+            <label class="switch-row compact">
+              <span class="switch"><input id="auto-answer" type="checkbox" checked /><span class="switch-track" aria-hidden="true"></span></span>
+              <span class="switch-label">自动解答</span>
+            </label>
+            <button id="btn-pause" class="ghost-btn small" type="button" aria-pressed="false">暂停</button>
+          </div>
+          <div class="auto-row ensemble-row">
+            <label id="ensemble-switch" class="switch-row compact" title="每次解答同时询问 3 个候选模型，由评审模型比对后输出最终答案。">
+              <span class="switch"><input id="ensemble-toggle" type="checkbox" data-testid="ensemble-toggle" /><span class="switch-track" aria-hidden="true"></span></span>
+              <span class="switch-label">交叉验证</span>
+            </label>
+            <span id="ensemble-cost" class="ensemble-cost">每次 3 份候选 + 1 次评审</span>
+          </div>
+          <div class="auto-row">
+            <label class="slider-field">
+              <span class="slider-label">灵敏度 <span id="sensitivity-label" class="field-value">3 级</span></span>
+              <input id="sensitivity" type="range" min="1" max="5" step="1" value="3" />
+            </label>
+            <span id="next-scan" class="countdown">下次扫描 --</span>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <aside id="history-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="history-title" hidden>
+      <header class="drawer-head">
+        <h2 id="history-title">历史记录</h2>
+        <div class="head-actions">
+          <button id="btn-clear-history" class="ghost-btn small" type="button">清空</button>
+          <button id="btn-close-history" class="icon-btn" type="button" aria-label="关闭历史记录">
+            <svg class="icon"><use href="#i-x"></use></svg>
+          </button>
+        </div>
+      </header>
+      <div class="drawer-body">
+        <p id="history-empty" class="drawer-empty">还没有历史记录。识别并解答后会自动保存在本机。</p>
+        <ul id="history-list" class="history-list"></ul>
+      </div>
+    </aside>
+
+    <aside id="settings-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+      <header class="drawer-head">
+        <h2 id="settings-title">设置</h2>
+        <button id="btn-close-settings" class="icon-btn" type="button" aria-label="关闭设置">
+          <svg class="icon"><use href="#i-x"></use></svg>
+        </button>
+      </header>
+      <form id="settings-form" class="drawer-body" novalidate>
+        <div id="settings-error" class="form-error" role="alert" hidden></div>
+
+        <section class="form-section">
+          <h3>模型服务</h3>
+          <label class="field">
+            <span class="field-label">API Base URL</span>
+            <input id="set-base-url" type="url" inputmode="url" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span class="field-label">API Key</span>
+            <input id="set-api-key" type="password" placeholder="sk-…" autocomplete="new-password" spellcheck="false" />
+            <span id="set-key-hint" class="field-hint">未配置密钥，当前为演示模式</span>
+          </label>
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">文本模型</span>
+              <input id="set-model" type="text" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span class="field-label">视觉模型</span>
+              <input id="set-vision" type="text" autocomplete="off" spellcheck="false" />
+            </label>
+          </div>
+        </section>
+
+        <section class="form-section">
+          <h3>视觉识别</h3>
+          <p class="field-hint">可选：截图文字识别可走独立端点，留空则继承「模型服务」。DeepSeek 官方是文本模型、没有视觉能力，需另配。</p>
+          <label class="field">
+            <span class="field-label">视觉 Base URL</span>
+            <input id="vision-base" type="url" inputmode="url" placeholder="留空继承全局" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span class="field-label">视觉 Key</span>
+            <input id="vision-key" type="password" placeholder="留空保持不变" autocomplete="new-password" spellcheck="false" />
+            <span id="vision-key-hint" class="field-hint">未配置</span>
+          </label>
+          <label class="field">
+            <span class="field-label">视觉模型</span>
+            <input id="vision-model" type="text" placeholder="留空继承全局" autocomplete="off" spellcheck="false" />
+          </label>
+        </section>
+
+        <section class="form-section">
+          <h3>交叉验证</h3>
+          <label class="switch-row">
+            <span class="switch"><input id="set-ensemble-enabled" type="checkbox" /><span class="switch-track" aria-hidden="true"></span></span>
+            <span class="switch-label">候选模型并行作答，再由评审模型比对</span>
+          </label>
+          <p class="field-hint">每次 3 份候选 + 1 次评审。候选模型留空视为未配置，至少需要 2 个候选。</p>
+          <div class="preset-row" role="group" aria-label="服务预设">
+            <button class="ghost-btn small" type="button" data-preset="commandcode">Command Code 订阅</button>
+            <button class="ghost-btn small" type="button" data-preset="deepseek">DeepSeek 官方</button>
+            <button class="ghost-btn small" type="button" data-preset="openai">OpenAI</button>
+            <button id="btn-ensemble-clear" class="ghost-btn small danger" type="button">清空候选</button>
+          </div>
+          <div id="ensemble-slots" class="ensemble-slots" data-testid="ensemble-slots"></div>
+        </section>
+
+        <section class="form-section">
+          <h3>自动识别</h3>
+          <label class="switch-row">
+            <span class="switch"><input id="set-auto-enabled" type="checkbox" /><span class="switch-track" aria-hidden="true"></span></span>
+            <span class="switch-label">自动识别题目变化</span>
+          </label>
+          <label class="switch-row">
+            <span class="switch"><input id="set-auto-answer" type="checkbox" /><span class="switch-track" aria-hidden="true"></span></span>
+            <span class="switch-label">识别后自动解答</span>
+          </label>
+          <label class="field">
+            <span class="field-label">扫描间隔（毫秒，800–5000）</span>
+            <input id="set-interval" type="number" min="800" max="5000" step="100" />
+          </label>
+          <label class="field">
+            <span class="field-label">变化灵敏度 <span id="set-sensitivity-label" class="field-value">3 级</span></span>
+            <input id="set-sensitivity" type="range" min="1" max="5" step="1" value="3" />
+          </label>
+        </section>
+
+        <section class="form-section">
+          <h3>识别区域</h3>
+          <p class="field-hint">在最近一帧画面上拖拽，只识别框选区域；不框选则识别整屏。</p>
+          <div id="crop-stage" class="crop-stage" role="application" aria-label="裁剪区域编辑">
+            <img id="crop-image" class="crop-image" alt="最近一帧画面" hidden />
+            <div id="crop-empty" class="crop-empty">暂无画面，请先选择窗口</div>
+            <div id="crop-rect" class="crop-rect" hidden></div>
+          </div>
+          <div class="crop-actions">
+            <span id="crop-value" class="field-value">全图</span>
+            <button id="btn-crop-reset" class="ghost-btn small" type="button">重置为全图</button>
+          </div>
+        </section>
+
+        <section id="permission-row" class="form-section" hidden>
+          <h3>macOS 屏幕录制</h3>
+          <p class="field-hint">当前状态：<span id="permission-status">未知</span>。首次采集需要在系统设置中允许本应用。</p>
+          <button id="btn-screen-permission" class="ghost-btn small" type="button">打开系统设置</button>
+        </section>
+
+        <footer class="drawer-foot">
+          <button id="btn-save-settings" class="primary-btn" type="submit">保存设置</button>
+        </footer>
+      </form>
+    </aside>
+
+    <div id="source-picker" class="modal" data-testid="source-picker" role="dialog" aria-modal="true" aria-labelledby="picker-title" hidden>
+      <div class="modal-panel">
+        <header class="drawer-head">
+          <h2 id="picker-title">选择窗口</h2>
+          <div class="head-actions">
+            <button id="btn-refresh-sources" class="ghost-btn small" type="button">刷新列表</button>
+            <button id="btn-close-picker" class="icon-btn" type="button" aria-label="关闭窗口选择">
+              <svg class="icon"><use href="#i-x"></use></svg>
+            </button>
+          </div>
+        </header>
+        <p id="source-status" class="modal-status" role="status">正在读取窗口列表…</p>
+        <div id="source-list" class="source-grid"></div>
+        <div id="source-empty" class="modal-empty" hidden>
+          <p>没有找到可采集的窗口。</p>
+          <p class="field-hint">请确认目标浏览器窗口已打开且未最小化。</p>
+          <button id="btn-picker-permission" class="ghost-btn small" type="button" hidden>打开屏幕录制设置</button>
+        </div>
+        <footer class="modal-foot">
+          <button id="btn-cancel-picker" class="ghost-btn small" type="button">取消</button>
+        </footer>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <video id="capture-video" class="offscreen" muted playsinline></video>
+    <canvas id="detect-canvas" class="offscreen"></canvas>
+    <canvas id="grab-canvas" class="offscreen"></canvas>
+
+    <script type="module" src="overlay.js"></script>
+  </body>
+</html>
