@@ -447,6 +447,26 @@ function scheduleExpandRetry(requested) {
   }, EXPAND_RETRY_MS);
 }
 
+/** Move the overlay by absolute screen coordinates (used by the pill drag). */
+function moveOverlayTo(payload) {
+  if (!win || win.isDestroyed()) return;
+  const x = Number(payload?.x);
+  const y = Number(payload?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw ipcError('BAD_REQUEST', '窗口坐标无效');
+  }
+  const display = screen.getDisplayNearestPoint({ x: Math.round(x), y: Math.round(y) });
+  const bounds = win.getBounds();
+  const { workArea } = display;
+  const maxX = workArea.x + Math.max(0, workArea.width - bounds.width);
+  const maxY = workArea.y + Math.max(0, workArea.height - bounds.height);
+  win.setPosition(
+    Math.min(maxX, Math.max(workArea.x, Math.round(x))),
+    Math.min(maxY, Math.max(workArea.y, Math.round(y))),
+    false,
+  );
+}
+
 function showOverlay({ focus = true, expandCollapsed = true } = {}) {
   if (!win || win.isDestroyed()) return;
   if (expandCollapsed && current().overlay.collapsed) applyCollapsed(false);
@@ -1210,6 +1230,14 @@ function registerIpc() {
   handle('aqs:collapse', async (_event, flag) => {
     applyCollapsed(asBoolean(flag, '折叠状态'));
     return buildState();
+  });
+
+  handle('aqs:move-window', async (_event, payload) => {
+    moveOverlayTo(payload);
+  });
+
+  handle('aqs:drag-end', async () => {
+    schedulePersistBounds('drag');
   });
 
   handle('aqs:show-overlay', async () => {

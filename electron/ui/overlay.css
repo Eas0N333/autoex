@@ -197,8 +197,12 @@ button {
   border: none;
   background: transparent;
   color: var(--text);
-  cursor: pointer;
+  cursor: grab;
   -webkit-app-region: no-drag;
+}
+
+.pill:active {
+  cursor: grabbing;
 }
 
 .pill-inner {

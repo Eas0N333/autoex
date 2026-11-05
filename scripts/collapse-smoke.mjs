@@ -396,6 +396,8 @@ const MEASURE_EXPRESSION = `(() => {
     collapsed: app ? app.dataset.collapsed === 'true' : null,
     width: window.outerWidth,
     height: window.outerHeight,
+    screenX: window.screenX,
+    screenY: window.screenY,
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
     pillVisible: shown(pill),
@@ -462,6 +464,21 @@ async function clickPill(state) {
   await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base, buttons: 1 });
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base, buttons: 0 });
   return { x, y };
+}
+
+async function dragPill(state, dx, dy) {
+  const rect = state.pillRect;
+  assert(rect, '胶囊不存在，无法拖动');
+  const x = rect.x + rect.width / 2;
+  const y = rect.y + rect.height / 2;
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+  await sleep(80);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x + dx / 2, y: y + dy / 2, button: 'left', buttons: 1 });
+  await sleep(80);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x + dx, y: y + dy, button: 'left', buttons: 1 });
+  await sleep(120);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x + dx, y: y + dy, button: 'left', buttons: 0, clickCount: 1 });
 }
 
 function isCollapsed(state) {
@@ -573,6 +590,18 @@ async function run() {
     `胶囊文本缺少「展开」提示：${describe(collapsed.pillText)}（aria-label=${describe(collapsed.pillLabel)}）`,
   );
   const shotCollapsed = await screenshot(shotFile);
+
+  stage = '拖动胶囊（不应展开）';
+  const dragStart = await measure();
+  await dragPill(dragStart, 80, 40);
+  const dragged = await pollUntil(
+    '拖动后窗口位置变化且保持折叠',
+    (state) => state.collapsed === true
+      && (Math.abs(state.screenX - dragStart.screenX) >= 40 || Math.abs(state.screenY - dragStart.screenY) >= 20),
+    SETTLE_TIMEOUT_MS,
+  );
+  assert(dragged.collapsed === true, `拖动后胶囊不应展开：${describe(dragged)}`);
+  assert(dragged.pillVisible, `拖动后胶囊不可见：${describe(dragged)}`);
 
   stage = '点击胶囊展开';
   await clickPill(collapsed);

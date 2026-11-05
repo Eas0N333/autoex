@@ -1239,8 +1239,8 @@ function renderCollapsed() {
   const hotkey = hotkeyLabel(state.settings.hotkeys.toggle);
   els.pillHint.textContent = compactHotkey(hotkey);
   els.pillHint.title = `展开快捷键：${state.settings.hotkeys.toggle}`;
-  els.pill.title = `展开 AI 答题悬浮窗（${hotkey}）`;
-  els.pill.setAttribute('aria-label', `展开 AI 答题悬浮窗（${hotkey}）`);
+  els.pill.title = `拖动移动 · 点击展开（${hotkey}）`;
+  els.pill.setAttribute('aria-label', `拖动移动或展开 AI 答题悬浮窗（${hotkey}）`);
   scheduleExpandRetry();
 }
 
@@ -3515,7 +3515,79 @@ function bindEvents() {
   els.collapse.addEventListener('click', () => {
     void collapseTo(true);
   });
+  let pillPointer = null;
+  let suppressPillClick = false;
+
+  const movePillWindow = () => {
+    if (!pillPointer || !pillPointer.moved) return;
+    const x = Math.round(pillPointer.startWindowX + (pillPointer.lastScreenX - pillPointer.startScreenX));
+    const y = Math.round(pillPointer.startWindowY + (pillPointer.lastScreenY - pillPointer.startScreenY));
+    void call('moveWindow', { x, y }).catch(() => {});
+  };
+
+  const schedulePillMove = () => {
+    if (!pillPointer || pillPointer.raf) return;
+    pillPointer.raf = requestAnimationFrame(() => {
+      if (!pillPointer) return;
+      pillPointer.raf = 0;
+      movePillWindow();
+    });
+  };
+
+  els.pill.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    pillPointer = {
+      id: event.pointerId,
+      startScreenX: event.screenX,
+      startScreenY: event.screenY,
+      startWindowX: window.screenX,
+      startWindowY: window.screenY,
+      lastScreenX: event.screenX,
+      lastScreenY: event.screenY,
+      moved: false,
+      raf: 0,
+    };
+    try {
+      els.pill.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is best-effort; a drag still works while the pointer stays inside.
+    }
+  });
+
+  els.pill.addEventListener('pointermove', (event) => {
+    if (!pillPointer || event.pointerId !== pillPointer.id) return;
+    pillPointer.lastScreenX = event.screenX;
+    pillPointer.lastScreenY = event.screenY;
+    const distance = Math.hypot(event.screenX - pillPointer.startScreenX, event.screenY - pillPointer.startScreenY);
+    if (distance <= 3) return;
+    pillPointer.moved = true;
+    schedulePillMove();
+  });
+
+  const endPillPointer = (event, cancelled) => {
+    if (!pillPointer || event.pointerId !== pillPointer.id) return;
+    const moved = pillPointer.moved;
+    if (pillPointer.raf) {
+      cancelAnimationFrame(pillPointer.raf);
+      pillPointer.raf = 0;
+    }
+    if (moved && !cancelled) movePillWindow();
+    pillPointer = null;
+    void call('dragEnd').catch(() => {});
+    if (!cancelled) suppressPillClick = moved;
+  };
+
+  els.pill.addEventListener('pointerup', (event) => endPillPointer(event, false));
+  els.pill.addEventListener('pointercancel', (event) => endPillPointer(event, true));
+  els.pill.addEventListener('lostpointercapture', (event) => {
+    if (pillPointer && event.pointerId === pillPointer.id) endPillPointer(event, true);
+  });
+
   els.pill.addEventListener('click', () => {
+    if (suppressPillClick) {
+      suppressPillClick = false;
+      return;
+    }
     requestExpand();
   });
   els.pill.addEventListener('dblclick', (event) => {
