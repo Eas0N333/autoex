@@ -345,6 +345,10 @@ const state = {
 
   toastTimer: 0,
   toastHideTimer: 0,
+  // 展开自愈：透明无边框窗口可能忽略 resize，展开后按实际 window 尺寸复核并重试。
+  expandRetryTimer: 0,
+  expandRetries: 0,
+  expandGaveUp: false,
   offEvent: null,
 };
 
@@ -453,7 +457,7 @@ function hotkeyLabel(accelerator) {
     .map((part) => {
       if (part === 'CommandOrControl' || part === 'CmdOrCtrl') return state.app.platform === 'darwin' ? 'Cmd' : 'Ctrl';
       if (part === 'Command') return 'Cmd';
-      if (part === 'Control') return 'Ctrl';
+      if (part === 'Control') return state.app.platform === 'darwin' ? 'Control' : 'Ctrl';
       return part;
     })
     .join('+\u200B');
@@ -1218,6 +1222,19 @@ function renderBusy() {
   els.stop.hidden = !state.streaming;
 }
 
+/** Compact accelerator for the 56px pill, e.g. Ctrl+Shift+Q -> Ctrl⇧Q, Control+Shift+X -> ⌃⇧X. */
+function compactHotkey(accelerator) {
+  if (!accelerator) return '';
+  const mac = state.app?.platform === 'darwin';
+  return String(accelerator)
+    .replace(/CommandOrControl|CmdOrCtrl|Command/g, mac ? '⌘' : 'Ctrl')
+    .replace(/Control/g, mac ? '⌃' : 'Ctrl')
+    .replace(/Shift/g, '⇧')
+    .replace(/Alt|Option/g, mac ? '⌥' : 'Alt')
+    .replace(/\+/g, '')
+    .replace(/\s+/g, '');
+}
+
 function renderCollapsed() {
   const collapsed = Boolean(state.collapsed);
   state.settings.overlay.collapsed = collapsed;
@@ -1225,10 +1242,13 @@ function renderCollapsed() {
   els.pill.hidden = !collapsed;
   els.panel.hidden = collapsed;
   document.body.dataset.collapsed = String(collapsed);
+  els.pill.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   const hotkey = hotkeyLabel(state.settings.hotkeys.toggle);
-  els.pillHint.textContent = hotkey;
+  els.pillHint.textContent = compactHotkey(hotkey);
   els.pillHint.title = `展开快捷键：${state.settings.hotkeys.toggle}`;
-  els.pill.title = `展开 AI 答题悬浮窗（${hotkey}）`;
+  els.pill.title = `拖动移动 · 点击展开（${hotkey}）`;
+  els.pill.setAttribute('aria-label', `拖动移动或展开 AI 答题悬浮窗（${hotkey}）`);
+  scheduleExpandRetry();
 }
 
 function permissionLabel(permission) {
@@ -1861,6 +1881,7 @@ function handleEvent(event) {
       } else if (event.command === 'pause') {
         void togglePause();
       } else if (event.command === 'toggle') {
+        if (state.collapsed) resetExpandRetry();
         void collapseTo(!state.collapsed);
       }
       break;
@@ -3443,6 +3464,80 @@ async function collapseTo(flag) {
 }
 
 /* ------------------------------------------------------------------ */
+/* expand self-heal                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * 透明无边框窗口在 Windows 上可能忽略 resize：主进程说「已展开」，实际窗口
+ * 仍是 56×96 的胶囊。这里按真实 window 尺寸复核，最多补两次展开请求。
+ */
+const EXPAND_RETRY_DELAY_MS = 300;
+const EXPAND_RETRY_LIMIT = 2;
+const EXPAND_MIN_SIDE = 200;
+
+/** 无法测量（无 outerWidth/Height）时不做推定，避免误伤无头/测试环境。 */
+function windowLooksExpanded() {
+  const width = Number(window.outerWidth);
+  const height = Number(window.outerHeight);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return true;
+  return width >= EXPAND_MIN_SIDE && height >= EXPAND_MIN_SIDE;
+}
+
+function resetExpandRetry() {
+  if (state.expandRetryTimer) {
+    clearTimeout(state.expandRetryTimer);
+    state.expandRetryTimer = 0;
+  }
+  state.expandRetries = 0;
+  state.expandGaveUp = false;
+}
+
+function scheduleExpandRetry() {
+  if (state.collapsed || !state.ready || windowLooksExpanded()) {
+    resetExpandRetry();
+    return;
+  }
+  if (state.expandGaveUp || state.expandRetryTimer) return;
+  state.expandRetryTimer = setTimeout(runExpandRetry, EXPAND_RETRY_DELAY_MS);
+}
+
+function runExpandRetry() {
+  state.expandRetryTimer = 0;
+  if (state.collapsed || !state.ready || windowLooksExpanded()) {
+    resetExpandRetry();
+    return;
+  }
+  if (state.expandRetries >= EXPAND_RETRY_LIMIT) {
+    state.expandGaveUp = true;
+    console.warn(
+      `[aqs] 展开重试 ${EXPAND_RETRY_LIMIT} 次后窗口仍为 ${window.outerWidth}x${window.outerHeight}，请点击托盘图标或重启应用。`,
+    );
+    try {
+      showToast('展开失败：窗口尺寸仍然异常，请点击托盘图标或重启应用。', 'error', 6000);
+    } catch {
+      // 提示失败不能影响状态记录。
+    }
+    return;
+  }
+  state.expandRetries += 1;
+  console.warn(
+    `[aqs] 窗口尺寸异常（${window.outerWidth}x${window.outerHeight}），第 ${state.expandRetries} 次重试展开。`,
+  );
+  try {
+    showToast('警告：窗口尺寸异常，正在重试展开', 'warn', 2800);
+  } catch {
+    // 提示失败也不能阻断重试。
+  }
+  void collapseTo(false).finally(scheduleExpandRetry);
+}
+
+/** 用户主动展开：重置重试预算，避免上一次放弃后点击失效。 */
+function requestExpand() {
+  resetExpandRetry();
+  void collapseTo(false);
+}
+
+/* ------------------------------------------------------------------ */
 /* wiring                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -3451,8 +3546,84 @@ function bindEvents() {
   els.collapse.addEventListener('click', () => {
     void collapseTo(true);
   });
+  let pillPointer = null;
+  let suppressPillClick = false;
+
+  const movePillWindow = () => {
+    if (!pillPointer || !pillPointer.moved) return;
+    const x = Math.round(pillPointer.startWindowX + (pillPointer.lastScreenX - pillPointer.startScreenX));
+    const y = Math.round(pillPointer.startWindowY + (pillPointer.lastScreenY - pillPointer.startScreenY));
+    void call('moveWindow', { x, y }).catch(() => {});
+  };
+
+  const schedulePillMove = () => {
+    if (!pillPointer || pillPointer.raf) return;
+    pillPointer.raf = requestAnimationFrame(() => {
+      if (!pillPointer) return;
+      pillPointer.raf = 0;
+      movePillWindow();
+    });
+  };
+
+  els.pill.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    pillPointer = {
+      id: event.pointerId,
+      startScreenX: event.screenX,
+      startScreenY: event.screenY,
+      startWindowX: window.screenX,
+      startWindowY: window.screenY,
+      lastScreenX: event.screenX,
+      lastScreenY: event.screenY,
+      moved: false,
+      raf: 0,
+    };
+    try {
+      els.pill.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is best-effort; a drag still works while the pointer stays inside.
+    }
+  });
+
+  els.pill.addEventListener('pointermove', (event) => {
+    if (!pillPointer || event.pointerId !== pillPointer.id) return;
+    pillPointer.lastScreenX = event.screenX;
+    pillPointer.lastScreenY = event.screenY;
+    const distance = Math.hypot(event.screenX - pillPointer.startScreenX, event.screenY - pillPointer.startScreenY);
+    if (distance <= 3) return;
+    pillPointer.moved = true;
+    schedulePillMove();
+  });
+
+  const endPillPointer = (event, cancelled) => {
+    if (!pillPointer || event.pointerId !== pillPointer.id) return;
+    const moved = pillPointer.moved;
+    if (pillPointer.raf) {
+      cancelAnimationFrame(pillPointer.raf);
+      pillPointer.raf = 0;
+    }
+    if (moved && !cancelled) movePillWindow();
+    pillPointer = null;
+    void call('dragEnd').catch(() => {});
+    if (!cancelled) suppressPillClick = moved;
+  };
+
+  els.pill.addEventListener('pointerup', (event) => endPillPointer(event, false));
+  els.pill.addEventListener('pointercancel', (event) => endPillPointer(event, true));
+  els.pill.addEventListener('lostpointercapture', (event) => {
+    if (pillPointer && event.pointerId === pillPointer.id) endPillPointer(event, true);
+  });
+
   els.pill.addEventListener('click', () => {
-    void collapseTo(false);
+    if (suppressPillClick) {
+      suppressPillClick = false;
+      return;
+    }
+    requestExpand();
+  });
+  els.pill.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    requestExpand();
   });
   els.settingsBtn.addEventListener('click', () => openSettings());
   els.historyBtn.addEventListener('click', () => openHistory());

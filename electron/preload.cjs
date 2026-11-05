@@ -83,6 +83,10 @@ const api = {
 
   collapse: (flag) => invoke('aqs:collapse', flag),
 
+  moveWindow: (position) => invoke('aqs:move-window', position),
+
+  dragEnd: () => invoke('aqs:drag-end'),
+
   showOverlay: () => invoke('aqs:show-overlay'),
 
   quit: () => invoke('aqs:quit'),

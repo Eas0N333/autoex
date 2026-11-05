@@ -15,6 +15,7 @@
     "smoke": "node scripts/smoke.mjs",
     "desktop": "electron .",
     "desktop:smoke": "node scripts/desktop-smoke.mjs",
+    "desktop:collapse": "node scripts/collapse-smoke.mjs",
     "pack:win": "electron-builder --win nsis portable --publish never",
     "pack:mac": "electron-builder --mac dmg zip --arm64 --publish never",
     "demo:page": "node scripts/demo-page.mjs",

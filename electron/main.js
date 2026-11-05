@@ -51,9 +51,13 @@ const SMOKE_TIMEOUT_MS = (() => {
 
 const MARGIN = 12;
 const COLLAPSED = Object.freeze({ width: 56, height: 96 });
-const MIN_WIDTH = 320;
+/** Below this the expanded panel cannot show its controls; such values are treated as corrupt. */
+const MIN_EXPANDED = Object.freeze({ width: 380, height: 560 });
+const DEFAULT_EXPANDED = Object.freeze({ width: 420 });
 const MAX_WIDTH = 680;
-const MIN_HEIGHT = 420;
+const EXPAND_TOLERANCE = 8;
+const EXPAND_RETRY_MS = 100;
+const MAX_PERSISTED_HEIGHT = 4000;
 const MAX_IMAGE_CHARS = 16 * 1024 * 1024;
 const RECOGNIZE_DEDUPE_MS = 10_000;
 const HISTORY_LIMIT = 20;
@@ -103,6 +107,7 @@ let history = [];
 let lastRecognize = null;
 let recognizeChain = Promise.resolve();
 let boundsTimer = null;
+let expandRetryTimer = null;
 /** Aborts the previous `aqs:test-connection` run whenever a new one starts. */
 let probeController = null;
 
@@ -282,24 +287,57 @@ function isVisibleOnSomeDisplay(rect) {
   });
 }
 
-/** Left-docked placement; saved x/y only win while they are still on screen. */
+/**
+ * Left-docked placement; saved x/y only win while they are still on screen.
+ *
+ * A stored expanded size smaller than `MIN_EXPANDED` is corrupt data (older builds
+ * persisted the 56x96 pill size, or clamped it to 320x420): the panel is repaired to
+ * `DEFAULT_EXPANDED.width` x full work-area height and the returned rect carries a
+ * non-enumerable `dirty` marker so the caller persists the repaired size. The marker
+ * is deliberately non-enumerable, so `{ ...bounds }` (BrowserWindow options) stays clean.
+ */
 function computeBounds(overlay) {
   const display = targetDisplay(overlay.displayId);
   const { workArea } = display;
   if (overlay.collapsed) {
-    return { x: workArea.x + MARGIN, y: workArea.y + MARGIN, ...COLLAPSED };
+    // Keep the pill where the panel was; only repair coordinates that are missing or off-screen.
+    const rememberX = Number.isFinite(Number(overlay.x)) ? Number(overlay.x) : workArea.x + MARGIN;
+    const rememberY = Number.isFinite(Number(overlay.y)) ? Number(overlay.y) : workArea.y + MARGIN;
+    const x = clampNumber(rememberX, workArea.x, workArea.x + workArea.width - COLLAPSED.width, workArea.x + MARGIN);
+    const y = clampNumber(rememberY, workArea.y, workArea.y + workArea.height - COLLAPSED.height, workArea.y + MARGIN);
+    return { x, y, ...COLLAPSED };
   }
-  const width = clampNumber(overlay.width, MIN_WIDTH, MAX_WIDTH, 420);
-  const maxHeight = Math.max(MIN_HEIGHT, workArea.height - MARGIN * 2);
-  const height = overlay.height === null || overlay.height === undefined
+  const widthKnown = overlay.width !== null && overlay.width !== undefined && Number.isFinite(Number(overlay.width));
+  const heightKnown = overlay.height !== null && overlay.height !== undefined && Number.isFinite(Number(overlay.height));
+  const dirty =
+    (widthKnown && Number(overlay.width) < MIN_EXPANDED.width)
+    || (heightKnown && Number(overlay.height) < MIN_EXPANDED.height);
+  const maxHeight = Math.max(MIN_EXPANDED.height, workArea.height - MARGIN * 2);
+  const width = dirty
+    ? DEFAULT_EXPANDED.width
+    : clampNumber(overlay.width, MIN_EXPANDED.width, MAX_WIDTH, DEFAULT_EXPANDED.width);
+  const height = dirty || !heightKnown
     ? maxHeight
-    : clampNumber(overlay.height, MIN_HEIGHT, maxHeight, maxHeight);
+    : clampNumber(overlay.height, MIN_EXPANDED.height, maxHeight, maxHeight);
   const docked = { x: workArea.x + MARGIN, y: workArea.y + MARGIN, width, height };
-  if (overlay.x === null || overlay.x === undefined || overlay.y === null || overlay.y === undefined) {
-    return docked;
+  let bounds = docked;
+  if (overlay.x !== null && overlay.x !== undefined && overlay.y !== null && overlay.y !== undefined) {
+    const remembered = { x: overlay.x, y: overlay.y, width, height };
+    if (isVisibleOnSomeDisplay(remembered)) bounds = remembered;
   }
-  const remembered = { x: overlay.x, y: overlay.y, width, height };
-  return isVisibleOnSomeDisplay(remembered) ? remembered : docked;
+  if (dirty) Object.defineProperty(bounds, 'dirty', { value: true, enumerable: false });
+  return bounds;
+}
+
+/** True when the actual window size is still an unusable (collapsed/corrupt) size. */
+function isExpandedSizeUsable(bounds) {
+  return bounds.width >= MIN_EXPANDED.width - EXPAND_TOLERANCE
+    && bounds.height >= MIN_EXPANDED.height - EXPAND_TOLERANCE;
+}
+
+/** The expanded rect the panel should have, repairing corrupt stored sizes. */
+function expandedTarget(overlay) {
+  return computeBounds({ ...overlay, collapsed: false });
 }
 
 function mediaSourceId() {
@@ -317,8 +355,15 @@ function persistBounds(reason) {
   const display = screen.getDisplayMatching(bounds);
   const patch = { overlay: { x: bounds.x, y: bounds.y, displayId: display.id } };
   if (!s.overlay.collapsed) {
-    patch.overlay.width = clampNumber(bounds.width, MIN_WIDTH, MAX_WIDTH, s.overlay.width);
-    patch.overlay.height = clampNumber(bounds.height, MIN_HEIGHT, 4000, s.overlay.height);
+    if (isExpandedSizeUsable(bounds)) {
+      patch.overlay.width = clampNumber(bounds.width, MIN_EXPANDED.width, MAX_WIDTH, s.overlay.width);
+      patch.overlay.height = clampNumber(bounds.height, MIN_EXPANDED.height, MAX_PERSISTED_HEIGHT, s.overlay.height);
+    } else {
+      // Still the collapsed remnant: never overwrite a usable saved size with it.
+      console.warn(
+        `[aqs] 忽略异常的窗口尺寸 ${bounds.width}×${bounds.height}（${reason}），保留已保存的展开尺寸`,
+      );
+    }
   }
   try {
     currentSettings = settingsStore.saveSettings(patch);
@@ -333,38 +378,122 @@ function schedulePersistBounds(reason) {
 }
 
 function applyCollapsed(collapsed) {
+  const flag = Boolean(collapsed);
   if (!win || win.isDestroyed()) return current();
   const s = current();
-  const next = applyBounds(collapsed, s.overlay);
+  let actual;
   try {
-    currentSettings = settingsStore.saveSettings({ overlay: { collapsed, ...next.save } });
+    actual = applyBounds(flag, s.overlay);
+  } catch (error) {
+    console.error('[aqs] 调整窗口尺寸失败：', error?.message ?? error);
+    toast('warn', flag ? '窗口折叠失败，请重启应用' : '窗口展开失败，请重启应用');
+    return current();
+  }
+  const patch = { collapsed: flag, x: actual.x, y: actual.y, displayId: actual.displayId };
+  if (!flag) {
+    // Never persist the collapsed remnant as the expanded size; keep a usable target instead.
+    const usable = isExpandedSizeUsable(actual) ? actual : expandedTarget(s.overlay);
+    patch.width = clampNumber(usable.width, MIN_EXPANDED.width, MAX_WIDTH, DEFAULT_EXPANDED.width);
+    patch.height = clampNumber(usable.height, MIN_EXPANDED.height, MAX_PERSISTED_HEIGHT, usable.height);
+  }
+  try {
+    currentSettings = settingsStore.saveSettings({ overlay: patch });
   } catch (error) {
     console.error('[aqs] 保存折叠状态失败：', error?.message ?? error);
-    currentSettings = { ...s, overlay: { ...s.overlay, collapsed } };
+    currentSettings = { ...s, overlay: { ...s.overlay, collapsed: flag } };
   }
-  win.setResizable(!collapsed);
+  win.setResizable(!flag);
   broadcastState();
   refreshTray();
   return current();
 }
 
-/** Resizes the window for a collapse/expand transition and returns the patch to persist. */
+/**
+ * Resizes the window for a collapse/expand transition and returns the bounds the window
+ * actually has afterwards. Transparent frameless windows ignore resizable/minimumSize on
+ * Windows, so the request is never trusted: read back, retry once, then report failure.
+ */
 function applyBounds(collapsed, overlay) {
-  const display = targetDisplay(overlay.displayId);
-  const { workArea } = display;
   if (collapsed) {
     win.setMinimumSize(COLLAPSED.width, COLLAPSED.height);
-    win.setBounds({ x: workArea.x + MARGIN, y: workArea.y + MARGIN, ...COLLAPSED });
-    return { save: { x: workArea.x + MARGIN, y: workArea.y + MARGIN, displayId: display.id } };
+    // Collapse in place: the pill keeps the panel's top-left corner instead of jumping to
+    // the work-area corner. Bounds are clamped so the whole pill stays reachable.
+    const currentBounds = win.getBounds();
+    const currentDisplay = screen.getDisplayMatching(currentBounds);
+    const area = currentDisplay.workArea;
+    const x = clampNumber(currentBounds.x, area.x, area.x + area.width - COLLAPSED.width, area.x + MARGIN);
+    const y = clampNumber(currentBounds.y, area.y, area.y + area.height - COLLAPSED.height, area.y + MARGIN);
+    win.setBounds({ x, y, ...COLLAPSED });
+    const actual = win.getBounds();
+    return { x: actual.x, y: actual.y, width: actual.width, height: actual.height, displayId: currentDisplay.id };
   }
-  win.setMinimumSize(MIN_WIDTH, MIN_HEIGHT);
-  const bounds = computeBounds({ ...overlay, collapsed: false });
-  win.setBounds(bounds);
-  return { save: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, displayId: display.id } };
+  win.setResizable(true);
+  win.setMinimumSize(MIN_EXPANDED.width, MIN_EXPANDED.height);
+  const requested = expandedTarget(overlay);
+  win.setBounds(requested);
+  let actual = win.getBounds();
+  if (!isExpandedSizeUsable(actual)) {
+    win.setSize(requested.width, requested.height);
+    actual = win.getBounds();
+  }
+  if (!isExpandedSizeUsable(actual)) {
+    console.error(
+      `[aqs] 展开窗口未生效（实际 ${actual.width}×${actual.height}，期望 ${requested.width}×${requested.height}），稍后重试`,
+    );
+    scheduleExpandRetry(requested);
+  }
+  return {
+    x: actual.x,
+    y: actual.y,
+    width: actual.width,
+    height: actual.height,
+    displayId: screen.getDisplayMatching(actual).id,
+  };
 }
 
-function showOverlay({ focus = true } = {}) {
+/** Re-applies the expanded bounds once the compositor settled; reports if it still fails. */
+function scheduleExpandRetry(requested) {
+  clearTimeout(expandRetryTimer);
+  expandRetryTimer = setTimeout(() => {
+    expandRetryTimer = null;
+    if (!win || win.isDestroyed() || current().overlay.collapsed) return;
+    win.setBounds(requested);
+    const actual = win.getBounds();
+    if (!isExpandedSizeUsable(actual)) {
+      console.error(
+        `[aqs] 窗口展开失败（实际 ${actual.width}×${actual.height}，期望 ≥${MIN_EXPANDED.width}×${MIN_EXPANDED.height}）`,
+      );
+      toast('warn', '窗口展开失败，请重启应用');
+      return;
+    }
+    persistBounds('expand-retry');
+    broadcastState();
+  }, EXPAND_RETRY_MS);
+}
+
+/** Move the overlay by absolute screen coordinates (used by the pill drag). */
+function moveOverlayTo(payload) {
   if (!win || win.isDestroyed()) return;
+  const x = Number(payload?.x);
+  const y = Number(payload?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw ipcError('BAD_REQUEST', '窗口坐标无效');
+  }
+  const display = screen.getDisplayNearestPoint({ x: Math.round(x), y: Math.round(y) });
+  const bounds = win.getBounds();
+  const { workArea } = display;
+  const maxX = workArea.x + Math.max(0, workArea.width - bounds.width);
+  const maxY = workArea.y + Math.max(0, workArea.height - bounds.height);
+  win.setPosition(
+    Math.min(maxX, Math.max(workArea.x, Math.round(x))),
+    Math.min(maxY, Math.max(workArea.y, Math.round(y))),
+    false,
+  );
+}
+
+function showOverlay({ focus = true, expandCollapsed = true } = {}) {
+  if (!win || win.isDestroyed()) return;
+  if (expandCollapsed && current().overlay.collapsed) applyCollapsed(false);
   trayVisible = true;
   if (win.isMinimized()) win.restore();
   win.show();
@@ -385,8 +514,17 @@ function hideOverlay() {
 
 function toggleOverlay() {
   if (!win || win.isDestroyed()) return;
-  if (win.isVisible() && trayVisible) hideOverlay();
-  else showOverlay();
+  const visible = win.isVisible() && trayVisible;
+  if (!visible) {
+    showOverlay();
+    return;
+  }
+  // A visible pill is an affordance, not "shown": the first toggle expands it.
+  if (current().overlay.collapsed) {
+    showOverlay({ focus: true });
+    return;
+  }
+  hideOverlay();
 }
 
 function createWindow() {
@@ -395,9 +533,9 @@ function createWindow() {
 
   win = new BrowserWindow({
     ...bounds,
-    minWidth: overlay.collapsed ? COLLAPSED.width : MIN_WIDTH,
+    minWidth: overlay.collapsed ? COLLAPSED.width : MIN_EXPANDED.width,
     maxWidth: MAX_WIDTH,
-    minHeight: overlay.collapsed ? COLLAPSED.height : MIN_HEIGHT,
+    minHeight: overlay.collapsed ? COLLAPSED.height : MIN_EXPANDED.height,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -589,13 +727,16 @@ function refreshTray() {
   if (!tray || tray.isDestroyed()) return;
   const s = current();
   const mode = engineMode();
+  const collapsed = Boolean(s.overlay.collapsed);
   const visible = Boolean(win && !win.isDestroyed() && win.isVisible() && trayVisible);
   tray.setImage(trayImage(mode));
-  tray.setToolTip(`${APP_NAME} · ${mode === 'demo' ? '演示模式' : '在线模式'}${paused ? ' · 已暂停' : ''}`);
+  tray.setToolTip(
+    `${APP_NAME} · ${mode === 'demo' ? '演示模式' : '在线模式'}${paused ? ' · 已暂停' : ''}${collapsed ? ' · 已折叠' : ''}`,
+  );
   tray.setContextMenu(Menu.buildFromTemplate([
     {
-      label: visible ? '隐藏悬浮窗' : '显示悬浮窗',
-      click: () => (visible ? hideOverlay() : showOverlay()),
+      label: collapsed ? '展开悬浮窗' : visible ? '隐藏悬浮窗' : '显示悬浮窗',
+      click: () => (collapsed || !visible ? showOverlay() : hideOverlay()),
     },
     { type: 'separator' },
     {
@@ -1090,7 +1231,10 @@ function registerIpc() {
       const bounds = win.getBounds();
       const width = clean.overlay?.width ?? bounds.width;
       const height = clean.overlay?.height ?? bounds.height;
-      if (bounds.width !== width || bounds.height !== height) {
+      if (width < MIN_EXPANDED.width || height < MIN_EXPANDED.height) {
+        // Repair instead of squeezing the panel into the old collapsed size.
+        applyCollapsed(false);
+      } else if (bounds.width !== width || bounds.height !== height) {
         win.setBounds({ ...bounds, width, height });
       }
     }
@@ -1189,6 +1333,14 @@ function registerIpc() {
   handle('aqs:collapse', async (_event, flag) => {
     applyCollapsed(asBoolean(flag, '折叠状态'));
     return buildState();
+  });
+
+  handle('aqs:move-window', async (_event, payload) => {
+    moveOverlayTo(payload);
+  });
+
+  handle('aqs:drag-end', async () => {
+    schedulePersistBounds('drag');
   });
 
   handle('aqs:show-overlay', async () => {
@@ -1360,6 +1512,8 @@ function cleanup() {
   if (cleanedUp) return;
   cleanedUp = true;
   clearTimeout(boundsTimer);
+  clearTimeout(expandRetryTimer);
+  expandRetryTimer = null;
   clearTimeout(smoke.timer);
   stopPermissionWatch();
   smoke.timer = null;
@@ -1454,8 +1608,7 @@ if (!gotLock) {
 } else {
   app.on('second-instance', () => {
     if (!win) return;
-    const overlay = current().overlay;
-    if (overlay.collapsed) applyCollapsed(false);
+    // showOverlay() expands a collapsed pill, so a second launch always reveals the panel.
     showOverlay();
   });
 

@@ -81,10 +81,11 @@ Event =
 ## 3. 窗口 / 托盘 / 快捷键 — `electron/main.js`
 
 - 单一实例锁；第二实例唤起并展开悬浮窗。
-- BrowserWindow：`frame:false, transparent:true, resizable:true, skipTaskbar:true, alwaysOnTop:true, hasShadow:false, show:false`，`minWidth:320, maxWidth:680, minHeight:420`。
-- 位置：目标显示器 `workArea` 左边缘 + 12px，顶部 + 12px，高度 = workArea.height - 24；`x` 可拖拽后记忆（`settings.overlay.x/y/width/height`），越界或显示器消失时回落到默认左边缘。
+- BrowserWindow：`frame:false, transparent:true, resizable:true, skipTaskbar:true, alwaysOnTop:true, hasShadow:false, show:false`，`minWidth:380, maxWidth:680, minHeight:560`（折叠态 56×96）。
+- 位置：首次默认贴目标显示器 `workArea` 左上角 + 12px，高度 = workArea.height - 24；之后记忆 `settings.overlay.x/y/width/height`，越界或显示器消失时回落到默认位置；移动坐标按当前显示器 `workArea` 钳位。
 - `alwaysOnTop: 'screen-saver'`；`setVisibleOnAllWorkspaces(true,{visibleOnFullScreen:true})`（mac）；`setContentProtection(true)`；mac 隐藏 Dock（`app.dock.hide()`），Win 不占任务栏。
-- 折叠态：宽 56、高 96 的胶囊，位置仍贴左边缘；展开恢复记忆宽度。折叠状态持久化。
+- 折叠态：宽 56、高 96 的胶囊，折叠时保留展开窗口当前左上角（钳位保证胶囊完整可见），不再跳到工作区角落；展开时恢复上次实际宽高。小于 380×560 的脏尺寸会在启动/展开时修正为 420×工作区高度；`setBounds` 后读回实际尺寸，失败重试并提示。折叠状态与位置分别持久化。
+- 拖动：折叠胶囊整块可拖（渲染层指针坐标 → `moveWindow`，超过 3px 抑制点击展开，结束调用 `dragEnd` 持久化）；展开态使用标题栏原生拖拽。
 - 托盘菜单：显示/隐藏、自动识别开关、自动解答开关、暂停/继续、打开日志目录、屏幕录制权限…（仅 macOS）、重启应用（仅 macOS）、退出。图标：Windows 用彩色 `build/tray.png`(32×32) 并随模式着色（demo 琥珀 / live 绿）；macOS 用黑白模板图 `build/trayTemplate.png`(16×16 @1x) + `build/trayTemplate@2x.png`(32×32 @2x)，经 `nativeImage.setTemplateImage(true)` 由系统菜单栏外观决定明暗，不做模式着色。
 - 全局快捷键 default：toggle/scan/pause；注册失败仅提示不崩溃。
 - 权限：Windows 无需额外授权；macOS 首次窗口采集触发 TCC「屏幕录制」弹窗，`systemPreferences.getMediaAccessStatus('screen')` 上报状态；`openScreenPermission()` 打开 `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture`。打开设置或列出窗口后，主进程轮询该状态约 20 秒（每 2 秒一次），变为 `granted` 时发 `permission` 事件、广播状态并弹窗提示立即重启（`app.relaunch()`）；macOS 必须重启应用后新授权才生效。
@@ -124,6 +125,8 @@ setPaused(flag): Promise<State>
 captureStatus(): Promise<{source, permission, capturing}>
 openScreenPermission(): Promise<void>
 collapse(flag): Promise<State>
+moveWindow({x,y}): Promise<void>                    // 按当前显示器 workArea 钳位
+dragEnd(): Promise<void>                            // 拖动结束持久化位置
 showOverlay(): Promise<void>
 quit(): Promise<void>
 onEvent(cb): () => void
@@ -191,7 +194,7 @@ export function edgeDensity(canvasEl): number          // 0..1
 - **自动条**：`自动识别` / `自动解答` 开关、灵敏度滑块（1–5）、暂停按钮、下次扫描倒计时。
 - **历史**：抽屉列出最近 20 条（题目摘要/时间/学科），点击回填题目与答案，`清空`。
 - **设置抽屉**：API Base URL、Key（password + hasApiKey 提示）、文本/视觉模型、自动间隔、灵敏度、自动解答、裁剪编辑器（最近一帧 + 拖拽矩形，归一化保存）、mac 权限按钮。
-- **折叠胶囊**：仅显示状态点 + 快捷键提示，点击展开。
+- **折叠胶囊**：状态点 + 「展开」+ 箭头 + 压缩快捷键提示（如 Windows `Ctrl⇧Q` / macOS `⌃⇧X`），整块可拖动，点击/双击展开。
 - 选择窗口弹层：缩略图网格、浏览器置顶（Windows）、`刷新列表`；darwin 上未授权时隐藏浏览器标签、空列表改为提示「系统设置 › 隐私与安全性 › 屏幕录制」并显示授权按钮（已授权后隐藏该按钮）。
 
 约束：`id`/`data-testid` 固定（冒烟与 CDP 依赖）：`#status-dot`、`#btn-pick-source`、`#btn-scan`、`#btn-settings`、`#btn-collapse`、`#answer-md`、`#question-text`、`#source-name`、`#auto-enabled`、`#auto-answer`、`#btn-pause`、`[data-testid="source-picker"]`、`#toast`。CSP：`default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net data:; script-src 'self' https://cdn.jsdelivr.net; connect-src 'none'`（KaTeX 为可选增强，CDN 不可达时必须降级为可读 TeX 且不阻塞首屏）。
@@ -206,6 +209,7 @@ export function edgeDensity(canvasEl): number          // 0..1
   "start": "node server/index.js",
   "desktop": "electron .",
   "desktop:smoke": "node scripts/desktop-smoke.mjs",
+  "desktop:collapse": "node scripts/collapse-smoke.mjs",
   "pack:win": "electron-builder --win nsis portable --publish never",
   "pack:mac": "electron-builder --mac dmg zip --arm64 --publish never",
   "pack:mac:universal": "electron-builder --mac dmg zip --universal --publish never"
@@ -244,6 +248,7 @@ export function edgeDensity(canvasEl): number          // 0..1
 
 - `npm test` 全绿（新增 engine + packaging 用例，旧 37 项不得回归）。
 - `npm run desktop:smoke` → `DESKTOP SMOKE OK`（Windows 与 macOS 均需通过）。
+- `npm run desktop:collapse` → `COLLAPSE SMOKE OK`：真实点击/拖动胶囊、折叠保持展开位置、showOverlay 展开路径、3 次折叠展开循环尺寸稳定；`scripts/collapse-smoke.mjs` 通过 CDP 驱动，无第三方依赖。
 - 手工/自动：选择 Edge/Chrome 窗口 → 页面题目变化 → 自动识别 → 流式答案（demo 模式即可）；macOS 首次采集先在系统弹窗授权「屏幕录制」，拒绝时用应用内「去授权」或托盘「屏幕录制权限…」，授权后重启应用。macOS 授权后已实测：窗口列表 10 项、选中窗口后 `capturing:true`、手动扫描识别出题目与 4 个选项、demo 答案流式返回；开发模式与打包版均通过。
 - macOS 打包验证（Apple Silicon 实测）：`npm run pack:mac` 产出 `dist/ai-quiz-solver-<version>-arm64.dmg/.zip`，`npm run pack:mac:universal` 产出 universal 同名产物；安装后确认菜单栏出现模板图标、无 Dock 图标、`Cmd+Q` 可退出。不记录体积指标。
 - 安全：密钥不出主进程、CSP 生效、IPC 入参校验、渲染进程无 Node、`setContentProtection` 开启、窗口截图不含悬浮窗自身。

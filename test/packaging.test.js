@@ -51,6 +51,7 @@ test('package.json keeps the HTTP scripts and adds the desktop ones', () => {
 
   assert.equal(pkg.scripts.desktop, 'electron .');
   assert.equal(pkg.scripts['desktop:smoke'], 'node scripts/desktop-smoke.mjs');
+  assert.equal(pkg.scripts['desktop:collapse'], 'node scripts/collapse-smoke.mjs');
   assert.equal(pkg.scripts['pack:win'], 'electron-builder --win nsis portable --publish never');
   assert.equal(pkg.scripts['pack:mac'], 'electron-builder --mac dmg zip --arm64 --publish never');
   assert.equal(pkg.scripts['pack:mac:universal'], 'electron-builder --mac dmg zip --universal --publish never');
