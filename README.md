@@ -43,6 +43,14 @@ npm run desktop    # 启动悬浮窗
 | `Ctrl/Cmd+Shift+S` | 立即扫描一次 |
 | `Ctrl/Cmd+Shift+P` | 暂停 / 继续自动识别 |
 
+### 本地演示页（测试用）
+
+```bash
+npm run demo:page        # http://127.0.0.1:8899/
+```
+
+一个四题的练习页（数学/物理/化学，含选项与「下一题」），用来试悬浮窗的自动取题：打开页面后在悬浮窗里选中该浏览器窗口，点「下一题」即可看到题目变化 → 自动识别 → 解答。未配置 API Key 时为演示答案，配置后走真实模型。
+
 ### 多模型交叉验证（3 份作答 + 1 次评审）
 
 开启后每次解答先并行请求最多 3 个候选模型独立作答（互不可见），再把三份答案交给评审模型逐份核对、指出错误并流式输出最终答案；选择题明确给出选项字母，结尾附 `【一致性】` 结论。单个候选失败不影响其余候选；评审失败时自动回退为第一个成功候选的原文。悬浮窗自动条与网页版「回答风格」旁都有「交叉验证」开关，答案卡展示三张候选卡片（可展开全文）、评审模型与耗时。
@@ -194,7 +202,8 @@ server/  config.js 配置 · provider.js 模型客户端（live/demo）· recogn
 electron/ main.js 窗口/托盘/快捷键 · probe.js 连接自检 · settings.js 配置与密钥掩码 · model-catalog.js 内置模型目录（下拉选项）· sources.js 窗口源 · preload.cjs · ui/ 悬浮窗前端
 web/     index.html · app.js 交互与 SSE · render.js 安全 Markdown/数学 · styles.css
 build/   icon.png · icon.ico · tray.png · trayTemplate.png（打包与托盘图标）
-scripts/ smoke.mjs（HTTP 冒烟）· desktop-smoke.mjs（Electron 冒烟）
+scripts/ smoke.mjs（HTTP 冒烟）· desktop-smoke.mjs（Electron 冒烟）· demo-page.mjs（本地练习页）
+demo/    quiz.html 本地练习页
 test/    node:test 套件 + OpenAI 兼容 stub
 docs/CONTRACT.md · CONTRACT-DESKTOP.md · CONTRACT-ENSEMBLE.md  内部接口契约
 fixtures/sample-question.png  演示与冒烟用题目图
