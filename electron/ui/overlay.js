@@ -339,6 +339,10 @@ const state = {
 
   toastTimer: 0,
   toastHideTimer: 0,
+  // 展开自愈：透明无边框窗口可能忽略 resize，展开后按实际 window 尺寸复核并重试。
+  expandRetryTimer: 0,
+  expandRetries: 0,
+  expandGaveUp: false,
   offEvent: null,
 };
 
@@ -1219,10 +1223,13 @@ function renderCollapsed() {
   els.pill.hidden = !collapsed;
   els.panel.hidden = collapsed;
   document.body.dataset.collapsed = String(collapsed);
+  els.pill.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   const hotkey = hotkeyLabel(state.settings.hotkeys.toggle);
   els.pillHint.textContent = hotkey;
   els.pillHint.title = `展开快捷键：${state.settings.hotkeys.toggle}`;
   els.pill.title = `展开 AI 答题悬浮窗（${hotkey}）`;
+  els.pill.setAttribute('aria-label', `展开 AI 答题悬浮窗（${hotkey}）`);
+  scheduleExpandRetry();
 }
 
 function permissionLabel(permission) {
@@ -1839,6 +1846,7 @@ function handleEvent(event) {
       } else if (event.command === 'pause') {
         void togglePause();
       } else if (event.command === 'toggle') {
+        if (state.collapsed) resetExpandRetry();
         void collapseTo(!state.collapsed);
       }
       break;
@@ -3413,6 +3421,80 @@ async function collapseTo(flag) {
 }
 
 /* ------------------------------------------------------------------ */
+/* expand self-heal                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * 透明无边框窗口在 Windows 上可能忽略 resize：主进程说「已展开」，实际窗口
+ * 仍是 56×96 的胶囊。这里按真实 window 尺寸复核，最多补两次展开请求。
+ */
+const EXPAND_RETRY_DELAY_MS = 300;
+const EXPAND_RETRY_LIMIT = 2;
+const EXPAND_MIN_SIDE = 200;
+
+/** 无法测量（无 outerWidth/Height）时不做推定，避免误伤无头/测试环境。 */
+function windowLooksExpanded() {
+  const width = Number(window.outerWidth);
+  const height = Number(window.outerHeight);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return true;
+  return width >= EXPAND_MIN_SIDE && height >= EXPAND_MIN_SIDE;
+}
+
+function resetExpandRetry() {
+  if (state.expandRetryTimer) {
+    clearTimeout(state.expandRetryTimer);
+    state.expandRetryTimer = 0;
+  }
+  state.expandRetries = 0;
+  state.expandGaveUp = false;
+}
+
+function scheduleExpandRetry() {
+  if (state.collapsed || !state.ready || windowLooksExpanded()) {
+    resetExpandRetry();
+    return;
+  }
+  if (state.expandGaveUp || state.expandRetryTimer) return;
+  state.expandRetryTimer = setTimeout(runExpandRetry, EXPAND_RETRY_DELAY_MS);
+}
+
+function runExpandRetry() {
+  state.expandRetryTimer = 0;
+  if (state.collapsed || !state.ready || windowLooksExpanded()) {
+    resetExpandRetry();
+    return;
+  }
+  if (state.expandRetries >= EXPAND_RETRY_LIMIT) {
+    state.expandGaveUp = true;
+    console.warn(
+      `[aqs] 展开重试 ${EXPAND_RETRY_LIMIT} 次后窗口仍为 ${window.outerWidth}x${window.outerHeight}，请点击托盘图标或重启应用。`,
+    );
+    try {
+      showToast('展开失败：窗口尺寸仍然异常，请点击托盘图标或重启应用。', 'error', 6000);
+    } catch {
+      // 提示失败不能影响状态记录。
+    }
+    return;
+  }
+  state.expandRetries += 1;
+  console.warn(
+    `[aqs] 窗口尺寸异常（${window.outerWidth}x${window.outerHeight}），第 ${state.expandRetries} 次重试展开。`,
+  );
+  try {
+    showToast('警告：窗口尺寸异常，正在重试展开', 'warn', 2800);
+  } catch {
+    // 提示失败也不能阻断重试。
+  }
+  void collapseTo(false).finally(scheduleExpandRetry);
+}
+
+/** 用户主动展开：重置重试预算，避免上一次放弃后点击失效。 */
+function requestExpand() {
+  resetExpandRetry();
+  void collapseTo(false);
+}
+
+/* ------------------------------------------------------------------ */
 /* wiring                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -3422,7 +3504,11 @@ function bindEvents() {
     void collapseTo(true);
   });
   els.pill.addEventListener('click', () => {
-    void collapseTo(false);
+    requestExpand();
+  });
+  els.pill.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    requestExpand();
   });
   els.settingsBtn.addEventListener('click', () => openSettings());
   els.historyBtn.addEventListener('click', () => openHistory());

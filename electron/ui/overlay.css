@@ -174,13 +174,14 @@ button {
   width: 100%;
   height: 100vh;
   margin: 0;
-  padding: 6px;
+  padding: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
   background: transparent;
   color: var(--text);
+  cursor: pointer;
   -webkit-app-region: no-drag;
 }
 
@@ -188,13 +189,60 @@ button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  gap: 5px;
   width: 100%;
-  padding: 14px 4px;
+  padding: 10px 3px;
   background: var(--panel-bg);
   border: 1px solid var(--border);
   border-radius: 26px;
   box-shadow: var(--shadow);
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.12s ease;
+}
+
+.pill:hover .pill-inner {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow);
+}
+
+.pill:active .pill-inner {
+  transform: scale(0.97);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 0;
+  border-radius: 26px;
+}
+
+.pill-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.pill-chevron {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  display: block;
+  color: var(--accent);
+  animation: pill-nudge 2.6s ease-in-out infinite;
+}
+
+.pill-label {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 0.5px;
+  color: var(--accent-strong);
+  text-align: center;
+  white-space: nowrap;
 }
 
 .pill-dot {
@@ -233,6 +281,18 @@ button {
   padding: 0 1px;
   overflow-wrap: normal;
   word-break: normal;
+}
+
+@keyframes pill-nudge {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
 }
 
 /* header ------------------------------------------------------------ */

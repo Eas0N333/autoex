@@ -35,6 +35,13 @@ npm run desktop    # 启动悬浮窗
 2. 选好后自动开始截帧。题目变化 → 自动识别 → 自动解答（开关可关）；识别文本可编辑后重新提交。
 3. 需要立即取题时点「扫描一次」；答案卡底部显示耗时、是否命中缓存与字符数。
 
+### 折叠与展开
+
+- 点标题栏的折叠按钮把悬浮窗收成一枚小胶囊，胶囊上带「展开」按钮，点胶囊任意位置即可展开。
+- 胶囊状态下也可以通过托盘图标（单击 / 托盘菜单「展开悬浮窗」）、全局快捷键 `Ctrl/Cmd+Shift+Q`、或再次启动应用来展开，而不只是把窗口显示出来。
+- 窗口尺寸会以**实际**边界保存：折叠只记录折叠状态，展开时恢复上次可用的宽度与高度。若历史尺寸已不可用（小于 380×560 的脏数据或超出屏幕），启动或展开时会自动修正为 420 × 屏幕工作区高度。
+- 展开后如果窗口尺寸没有恢复，应用会在再次点击时重试并给出提示，不会出现「状态已展开但窗口仍是胶囊」的静默失败。
+
 ### 快捷键（默认值）
 
 | 快捷键 | 作用 |
@@ -189,9 +196,10 @@ npm start
 npm test              # node:test 单测/集成测试（99 项），无网络、无 Key，端口随机
 npm run smoke         # 启动真实 HTTP 进程跑完整 demo 链路，输出 SMOKE OK
 npm run desktop:smoke # 启动真实 Electron 进程，校验左边缘停靠 + 截图，输出 DESKTOP SMOKE OK
+npm run desktop:collapse # 从折叠态驱动真实点击/托盘路径展开，校验窗口与持久化尺寸，输出 COLLAPSE SMOKE OK
 ```
 
-`desktop:smoke` 需要已执行 `npm install`（Electron 二进制），使用临时设置文件与 `AI_DEMO=1`，不会读写你的真实配置。
+`desktop:smoke` / `desktop:collapse` 需要已执行 `npm install`（Electron 二进制），使用临时设置文件与 `AI_DEMO=1`，不会读写你的真实配置；`desktop:collapse` 通过 CDP 点击胶囊、调用托盘/快捷键同一路径的展开入口，反复折叠展开后检查设置里保存的宽度与高度。
 
 ## 目录
 
@@ -202,7 +210,7 @@ server/  config.js 配置 · provider.js 模型客户端（live/demo）· recogn
 electron/ main.js 窗口/托盘/快捷键 · probe.js 连接自检 · settings.js 配置与密钥掩码 · model-catalog.js 内置模型目录（下拉选项）· sources.js 窗口源 · preload.cjs · ui/ 悬浮窗前端
 web/     index.html · app.js 交互与 SSE · render.js 安全 Markdown/数学 · styles.css
 build/   icon.png · icon.ico · tray.png · trayTemplate.png（打包与托盘图标）
-scripts/ smoke.mjs（HTTP 冒烟）· desktop-smoke.mjs（Electron 冒烟）· demo-page.mjs（本地练习页）
+scripts/ smoke.mjs（HTTP 冒烟）· desktop-smoke.mjs（Electron 冒烟）· collapse-smoke.mjs（折叠/展开冒烟）· demo-page.mjs（本地练习页）
 demo/    quiz.html 本地练习页
 test/    node:test 套件 + OpenAI 兼容 stub
 docs/CONTRACT.md · CONTRACT-DESKTOP.md · CONTRACT-ENSEMBLE.md  内部接口契约
