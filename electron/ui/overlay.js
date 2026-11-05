@@ -65,8 +65,8 @@ const AI_PRESETS = {
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
     visionModel: 'gpt-4o-mini',
-    candidates: [],
-    judge: '',
+    candidates: ['gpt-4o-mini', 'gpt-4o-mini', 'gpt-4o-mini'],
+    judge: 'gpt-4o-mini',
   },
 };
 
@@ -2159,17 +2159,34 @@ function applyPreset(name) {
   initEnsembleForm();
   const fields = els.ensembleFields;
   if (!fields) return;
-  if (!els.setBaseUrl.value.trim()) els.setBaseUrl.value = preset.baseUrl;
-  if (!els.setModel.value.trim()) els.setModel.value = preset.model;
-  if (!els.setVision.value.trim() && preset.visionModel) els.setVision.value = preset.visionModel;
+  const presetBases = Object.values(AI_PRESETS).map((item) => item.baseUrl);
+  const presetModels = new Set(
+    Object.values(AI_PRESETS)
+      .flatMap((item) => [item.model, item.visionModel, ...(item.candidates ?? []), item.judge])
+      .filter(Boolean),
+  );
+  const currentBase = els.setBaseUrl.value.trim();
+  const baseIsDefault = !currentBase || presetBases.includes(currentBase);
+  if (baseIsDefault) els.setBaseUrl.value = preset.baseUrl;
+  if (!els.setModel.value.trim() || (baseIsDefault && presetModels.has(els.setModel.value.trim()))) {
+    els.setModel.value = preset.model;
+  }
+  if (
+    preset.visionModel &&
+    (!els.setVision.value.trim() || (baseIsDefault && presetModels.has(els.setVision.value.trim())))
+  ) {
+    els.setVision.value = preset.visionModel;
+  }
   const models = Array.isArray(preset.candidates) ? preset.candidates : [];
   const slots = [...fields.candidates, fields.judge];
   slots.forEach((slot, index) => {
-    if (!slot.base.value.trim()) slot.base.value = preset.baseUrl;
     const suggested = index < fields.candidates.length ? models[index] : preset.judge;
     if (!suggested) return;
+    const slotBase = slot.base.value.trim();
+    if (!slotBase || presetBases.includes(slotBase)) slot.base.value = preset.baseUrl;
     slot.model.placeholder = suggested;
-    if (!slot.model.value.trim()) slot.model.value = suggested;
+    const slotModel = slot.model.value.trim();
+    if (!slotModel || presetModels.has(slotModel)) slot.model.value = suggested;
   });
   showToast(`已填入 ${preset.label} 的端点与模型，可修改后保存。`, 'info');
 }

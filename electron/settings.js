@@ -50,8 +50,8 @@ export const AI_PRESETS = Object.freeze({
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
     visionModel: 'gpt-4o-mini',
-    candidates: [],
-    judge: '',
+    candidates: ['gpt-4o-mini', 'gpt-4o-mini', 'gpt-4o-mini'],
+    judge: 'gpt-4o-mini',
   }),
 });
 
