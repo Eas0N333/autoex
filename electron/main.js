@@ -292,7 +292,12 @@ function computeBounds(overlay) {
   const display = targetDisplay(overlay.displayId);
   const { workArea } = display;
   if (overlay.collapsed) {
-    return { x: workArea.x + MARGIN, y: workArea.y + MARGIN, ...COLLAPSED };
+    // Keep the pill where the panel was; only repair coordinates that are missing or off-screen.
+    const rememberX = Number.isFinite(Number(overlay.x)) ? Number(overlay.x) : workArea.x + MARGIN;
+    const rememberY = Number.isFinite(Number(overlay.y)) ? Number(overlay.y) : workArea.y + MARGIN;
+    const x = clampNumber(rememberX, workArea.x, workArea.x + workArea.width - COLLAPSED.width, workArea.x + MARGIN);
+    const y = clampNumber(rememberY, workArea.y, workArea.y + workArea.height - COLLAPSED.height, workArea.y + MARGIN);
+    return { x, y, ...COLLAPSED };
   }
   const widthKnown = overlay.width !== null && overlay.width !== undefined && Number.isFinite(Number(overlay.width));
   const heightKnown = overlay.height !== null && overlay.height !== undefined && Number.isFinite(Number(overlay.height));
@@ -401,13 +406,18 @@ function applyCollapsed(collapsed) {
  * Windows, so the request is never trusted: read back, retry once, then report failure.
  */
 function applyBounds(collapsed, overlay) {
-  const display = targetDisplay(overlay.displayId);
-  const { workArea } = display;
   if (collapsed) {
     win.setMinimumSize(COLLAPSED.width, COLLAPSED.height);
-    win.setBounds({ x: workArea.x + MARGIN, y: workArea.y + MARGIN, ...COLLAPSED });
+    // Collapse in place: the pill keeps the panel's top-left corner instead of jumping to
+    // the work-area corner. Bounds are clamped so the whole pill stays reachable.
+    const currentBounds = win.getBounds();
+    const currentDisplay = screen.getDisplayMatching(currentBounds);
+    const area = currentDisplay.workArea;
+    const x = clampNumber(currentBounds.x, area.x, area.x + area.width - COLLAPSED.width, area.x + MARGIN);
+    const y = clampNumber(currentBounds.y, area.y, area.y + area.height - COLLAPSED.height, area.y + MARGIN);
+    win.setBounds({ x, y, ...COLLAPSED });
     const actual = win.getBounds();
-    return { x: actual.x, y: actual.y, width: actual.width, height: actual.height, displayId: display.id };
+    return { x: actual.x, y: actual.y, width: actual.width, height: actual.height, displayId: currentDisplay.id };
   }
   win.setResizable(true);
   win.setMinimumSize(MIN_EXPANDED.width, MIN_EXPANDED.height);
@@ -424,7 +434,13 @@ function applyBounds(collapsed, overlay) {
     );
     scheduleExpandRetry(requested);
   }
-  return { x: actual.x, y: actual.y, width: actual.width, height: actual.height, displayId: display.id };
+  return {
+    x: actual.x,
+    y: actual.y,
+    width: actual.width,
+    height: actual.height,
+    displayId: screen.getDisplayMatching(actual).id,
+  };
 }
 
 /** Re-applies the expanded bounds once the compositor settled; reports if it still fails. */

@@ -38,8 +38,8 @@ test('package.json keeps the HTTP scripts and adds the desktop ones', () => {
 
   assert.equal(pkg.scripts.desktop, 'electron .');
   assert.equal(pkg.scripts['desktop:smoke'], 'node scripts/desktop-smoke.mjs');
-  assert.equal(pkg.scripts['pack:win'], 'electron-builder --win nsis portable');
-  assert.equal(pkg.scripts['pack:mac'], 'electron-builder --mac dmg zip');
+  assert.equal(pkg.scripts['pack:win'], 'electron-builder --win nsis portable --publish never');
+  assert.equal(pkg.scripts['pack:mac'], 'electron-builder --mac dmg zip --publish never');
 });
 
 test('runtime dependencies stay empty and devDependencies are Electron only', () => {

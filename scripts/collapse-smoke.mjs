@@ -609,6 +609,23 @@ async function run() {
   assertPanelUsable(firstExpand);
   const shotMouse = await screenshot(shotExpanded);
 
+  stage = '折叠保持展开位置';
+  await evaluate(`window.aqs.moveWindow({ x: 300, y: 24 })`);
+  const beforeCollapse = await pollUntil(
+    '展开窗口移动到位',
+    (state) => Math.abs(state.screenX - 300) <= 2 && Math.abs(state.screenY - 24) <= 2,
+    SETTLE_TIMEOUT_MS,
+  );
+  await evaluate(COLLAPSE_TRUE);
+  const collapsedInPlace = await pollUntil(
+    '折叠后胶囊停在原位置',
+    (state) => state.collapsed === true
+      && Math.abs(state.screenX - beforeCollapse.screenX) <= 2
+      && Math.abs(state.screenY - beforeCollapse.screenY) <= 2,
+    SETTLE_TIMEOUT_MS,
+  );
+  assert(collapsedInPlace.pillVisible, `折叠后胶囊不可见：${describe(collapsedInPlace)}`);
+
   stage = 'showOverlay 展开路径';
   const bridgeExpand = await expandViaBridge();
   assertPanelUsable(bridgeExpand);
