@@ -236,33 +236,66 @@
             <span id="set-key-hint" class="field-hint">未配置密钥，当前为演示模式</span>
           </label>
           <div class="field-row">
-            <label class="field">
-              <span class="field-label">文本模型</span>
-              <input id="set-model" type="text" autocomplete="off" spellcheck="false" />
-            </label>
-            <label class="field">
-              <span class="field-label">视觉模型</span>
-              <input id="set-vision" type="text" autocomplete="off" spellcheck="false" />
-            </label>
+            <div class="field">
+              <label class="field-label" for="set-model">文本模型</label>
+              <select id="set-model" class="model-select" data-testid="model-select" autocomplete="off"></select>
+              <input
+                id="set-model-custom"
+                class="model-custom"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="输入模型 id"
+                hidden
+              />
+              <span id="set-model-hint" class="field-hint model-hint" hidden></span>
+            </div>
+            <div class="field">
+              <label class="field-label" for="set-vision">识别模型（OCR）</label>
+              <select id="set-vision" class="model-select" data-testid="model-select" autocomplete="off"></select>
+              <input
+                id="set-vision-custom"
+                class="model-custom"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="输入模型 id"
+                hidden
+              />
+              <span id="set-vision-hint" class="field-hint model-hint" hidden></span>
+            </div>
           </div>
         </section>
 
         <section class="form-section">
           <h3>视觉识别</h3>
-          <p class="field-hint">可选：截图文字识别可走独立端点，留空则继承「模型服务」。DeepSeek 官方是文本模型、没有视觉能力，需另配。</p>
-          <label class="field">
-            <span class="field-label">视觉 Base URL</span>
-            <input id="vision-base" type="url" inputmode="url" placeholder="留空继承全局" autocomplete="off" spellcheck="false" />
-          </label>
-          <label class="field">
-            <span class="field-label">视觉 Key</span>
-            <input id="vision-key" type="password" placeholder="留空保持不变" autocomplete="new-password" spellcheck="false" />
-            <span id="vision-key-hint" class="field-hint">未配置</span>
-          </label>
-          <label class="field">
-            <span class="field-label">视觉模型</span>
-            <input id="vision-model" type="text" placeholder="留空继承全局" autocomplete="off" spellcheck="false" />
-          </label>
+          <p class="field-hint">可选：截图文字识别可走独立端点，留空则继承「模型服务」；此处的模型优先于上方识别模型。DeepSeek 官方只有部分模型支持视觉，未列出的模型无法读图。</p>
+          <div class="field">
+            <label class="field-label" for="vision-model">视觉模型</label>
+            <select id="vision-model" class="model-select" data-testid="model-select" autocomplete="off"></select>
+            <input
+              id="vision-model-custom"
+              class="model-custom"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="留空继承全局"
+              hidden
+            />
+            <span id="vision-model-hint" class="field-hint model-hint" hidden></span>
+          </div>
+          <details class="slot-advanced">
+            <summary>高级：独立视觉端点 / Key（默认继承全局）</summary>
+            <label class="field">
+              <span class="field-label">视觉 Base URL</span>
+              <input id="vision-base" type="url" inputmode="url" placeholder="留空继承全局" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span class="field-label">视觉 Key</span>
+              <input id="vision-key" type="password" placeholder="留空继承全局" autocomplete="new-password" spellcheck="false" />
+              <span id="vision-key-hint" class="field-hint">未配置</span>
+            </label>
+          </details>
         </section>
 
         <section class="form-section">

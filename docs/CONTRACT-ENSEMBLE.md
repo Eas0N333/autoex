@@ -37,6 +37,34 @@ ai: {
 - 密钥掩码：渲染层只能拿到 `hasApiKey`（含继承），永不回传明文；空字符串 patch 表示保持原值。
 - 环境变量（网页版）：`AI_VISION_BASE_URL` / `AI_VISION_API_KEY` / `AI_VISION_MODEL`、`AI_ENSEMBLE=1`；`config.json` 支持完整嵌套。
 
+### 1.1 内置模型目录 — `electron/model-catalog.js`（新模块）
+
+```js
+export const MODEL_CATALOG = {           // key: provider
+  commandcode: { label, baseUrl, models: [{ id, label, vendor, vision }] },
+  deepseek:    { label, baseUrl, models: [...] },
+  openai:      { label, baseUrl, models: [] }
+};
+export function catalogForBaseUrl(baseUrl) -> { key, label, baseUrl, models } | null
+export function modelsForBaseUrl(baseUrl) -> CatalogModel[]
+export function modelLabel(id) -> string
+export function isVisionModel(id) -> boolean
+```
+
+- `commandcode`（标签 `Command Code（GOAT）`）：**67 个**模型 = GOAT 计划可用模型 ∩ `/provider/v1/models` 中 `supported_endpoints` 含 `/chat/completions` 的条目；排除仅提供 `/messages` 的 `claude-*` 与 decision 模型 `Jev*`；其中 11 个 `vision: true`。
+- `deepseek`（`DeepSeek 官方`）：`deepseek-flash`（vision）、`deepseek-v4-pro`（无 vision）。
+- `openai`（`OpenAI`）：`models: []`，不内置目录。
+- 端点匹配只看 hostname：含 `commandcode.ai` → `commandcode`；含 `api.deepseek.com` → `deepseek`；含 `api.openai.com` → `openai`；其余返回 `null`（UI 回退文本输入，仅自定义端点）。
+- `modelLabel(未知 id)` 原样返回该 id；`isVisionModel(未知 id)` 返回 `false`。
+- 该模块零依赖、无 IO，仅被 `electron/ui/*` 与主进程引用，不改变 `server/` 的配置模型。
+
+### 1.2 下拉与单 Key 继承约束
+
+- 桌面设置里「文本模型 / 视觉模型 / 候选模型 / 评审模型」**只能是下拉**，选项来自 `modelsForBaseUrl(全局 ai.baseUrl)`；全局 Base URL 修改后全部下拉立即按新端点重建。目录里仍存在的 id 保持选中；跨端点的旧值以「当前：<id>」选项保留并选中，避免静默改写配置。
+- Command Code 只需全局填**一个订阅 Key**（`Authorization: Bearer <CMD_API_KEY>`）；候选/评审的 `baseUrl` / `apiKey` 折叠在「高级端点」`<details>` 中且默认收起，留空即继承全局。`model` 从下拉选择，不再手输。
+- 目录为空（`openai` 或自定义端点）时才回退为文本输入。
+- 配置层字段不变（仍是 `ai.model` / `ai.visionModel` / `ensemble.candidates[].model` / `ensemble.judge.model`），下拉只是编辑器；前端提交的仍是模型 id。
+
 ## 2. 引擎事件 — `server/engine.js`
 
 `answerStream(input, { signal, ensemble })`，`ensemble` 缺省取 `config.ai.ensemble.enabled`。
@@ -90,7 +118,7 @@ export async function* ensembleAnswer(input, {candidates, judge, signal, limits}
 
 ## 5. 桌面 — settings / main / IPC
 
-- `electron/settings.js`：默认值、清洗、校验、`getState()` 掩码如上；快捷预设仅作为 UI 常量导出：
+- `electron/settings.js`：默认值、清洗、校验、`getState()` 掩码如上；快捷预设仅作为 UI 常量导出，模型 id 必须能在 `electron/model-catalog.js` 中解析；预设只填空白字段：
   ```js
   export const AI_PRESETS = {
     commandcode: { label:'Command Code 订阅', baseUrl:'https://api.commandcode.ai/provider/v1', model:'deepseek/deepseek-v4.1-flash', visionModel:'deepseek/deepseek-v4.1-flash',
@@ -107,18 +135,22 @@ export async function* ensembleAnswer(input, {candidates, judge, signal, limits}
 
 - 自动条新增 `#ensemble-toggle`（`data-testid="ensemble-toggle"`）：文案「交叉验证」，不可用时禁用并 title 说明「需在设置中配置 ≥2 个候选模型」。
 - 答案卡：交叉验证时在最终答案上方渲染 `[data-testid="candidates"]`，每行 `[data-testid="candidate-<index>"]`：状态点（running/done/error）、名称、模型、耗时；点击展开该候选完整答案（Markdown）；全部完成后显示「3/3 已完成」；失败候选显示错误码。评审流式期间显示「评审中…」。
-- 设置抽屉新增两组：
-  - **视觉识别**：可选独立端点（Base URL / Key / 模型），留空继承全局，提示「视觉模型须支持图片输入（DeepSeek 官方用 deepseek-flash）」。
-  - **交叉验证**：总开关、3 个候选槽（名称/Base URL/Key/模型/温度）、评审槽；每槽 key 只显示「已保存/继承/未配置」；预设按钮 `Command Code 订阅` / `DeepSeek 官方` / `OpenAI` 一键填 baseUrl 与建议模型（仅填空字段）；`清空候选`。
+- 设置抽屉新增/调整三组：
+  - **模型服务**：Base URL / Key 照旧；文本模型与视觉模型改为 `<select>`（选项 = `modelsForBaseUrl(全局 Base URL)`，视觉模型选项后缀「（视觉）」）；目录为空时回退文本输入。全局 Base URL 改动后立即重建所有下拉。
+  - **视觉识别**：可选独立端点（Base URL / Key / 模型下拉），留空继承全局，提示「视觉模型须支持图片输入（DeepSeek 官方用 deepseek-flash）」。
+  - **交叉验证**：总开关、3 个候选槽、评审槽；每槽「模型」为下拉（同一目录），「名称/温度」同级；候选/评审的 Base URL / Key 收进默认折叠的「高级端点」`<details>`，留空继承全局，因此 Command Code 只需一个订阅 Key。每槽 key 只显示「已保存/继承/未配置」；预设按钮 `Command Code 订阅` / `DeepSeek 官方` / `OpenAI` 一键填 baseUrl 与默认下拉值（仅填空字段）；`清空候选`。
+- 候选/评审下拉不得出现目录外条目（尤其 Command Code 的 `claude-*` 与 `Jev*`）；已保存但目录中不存在的模型 id 以「当前：<id>」选项保留并选中，避免静默丢配置。
 - 保存后 `updateSettings` 触发主进程重建 engine；UI 依据返回 State 刷新可用性。
 - 键盘/无障碍/深浅色沿用现有；新增元素全部 `data-testid`。
 
 ## 7. 验证口径（QA）
 
-- `npm test` 全绿（现有 57 项不回归）+ 新增：
+- `npm test` 全绿（现有 85 项不回归）+ 新增：
   - `test/ensemble.test.js`：3 provider stub 并行、候选事件 running→done、评审请求包含三份答案与 `[TASK:JUDGE]`、评审流式 delta、部分失败、全部失败、评审失败回退、abort 全链路、缓存重放（含候选）、候选数 <2 报 BAD_REQUEST、温度/模型签名进缓存键。
   - `test/settings.test.js`（或现有）：新字段清洗/范围/掩码/继承/demo 判定/坏 patch 拒绝。
   - `test/server.test.js`：`ensemble:true` 的 SSE `candidate` 事件与 JSON 聚合；`/api/config.ensemble` 不含密钥。
+  - `test/model-catalog.test.js`：三个供应商目录、Command Code 67 项 / 11 个视觉模型、claude 与 Jev 不在目录中、hostname 匹配、未知 id 的 `modelLabel` / `isVisionModel` 回退。
+- 桌面下拉 DOM 验证（无头 Electron + stub `window.aqs` 打开 `electron/ui/index.html`，脚本放临时目录不入库）：Command Code 下模型控件为 `<select>` 且目录 67 项、不含 claude / Jev、三个候选与评审默认有值；全局 Base URL 改为 `https://api.deepseek.com` 后目录切换为 2 项；候选 Key 位于默认收起的 `<details>` 内不可见；未知端点回退文本框。19 条断言全过。
 - `npm run desktop:smoke` + `npm run smoke` 仍通过。
 - 真实链路：用本机 stub 起 3 个不同回答的端点（不同 model 名区分），验证评审收到三份并输出最终答案；桌面端选中浏览器窗口后自动走交叉验证。
 

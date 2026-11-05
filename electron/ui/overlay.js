@@ -13,6 +13,7 @@
  */
 
 import { renderMarkdown, loadKatex } from '../../web/render.js';
+import { catalogForBaseUrl } from '../model-catalog.js';
 import {
   startCapture,
   stopCapture,
@@ -187,14 +188,11 @@ const els = {
   setBaseUrl: $('set-base-url'),
   setApiKey: $('set-api-key'),
   setKeyHint: $('set-key-hint'),
-  setModel: $('set-model'),
-  setVision: $('set-vision'),
   setAutoEnabled: $('set-auto-enabled'),
   setAutoAnswer: $('set-auto-answer'),
   visionBase: $('vision-base'),
   visionKey: $('vision-key'),
   visionKeyHint: $('vision-key-hint'),
-  visionModel: $('vision-model'),
   setEnsembleEnabled: $('set-ensemble-enabled'),
   ensembleSlots: $('ensemble-slots'),
   ensembleClear: $('btn-ensemble-clear'),
@@ -2003,6 +2001,193 @@ function clearHistory() {
 /* settings drawer                                                     */
 /* ------------------------------------------------------------------ */
 
+function modelFieldParts(id) {
+  const select = $(id);
+  if (!select) return null;
+  return { id, select, custom: $(`${id}-custom`), hint: $(`${id}-hint`) };
+}
+
+/** 下拉可见且已有选项时以 select 为准，否则回退到同 id 的「-custom」文本框。 */
+function usingModelSelect(field) {
+  return Boolean(field && !field.select.hidden && field.select.options.length > 0);
+}
+
+function ensureModelOption(select, value) {
+  if (!value) return;
+  for (const option of select.options) {
+    if (option.value === value) return;
+  }
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = `当前：${value}`;
+  option.dataset.legacy = 'true';
+  select.append(option);
+}
+
+function readModelValue(id) {
+  const field = modelFieldParts(id);
+  if (!field) return '';
+  if (usingModelSelect(field)) return field.select.value.trim();
+  return field.custom ? field.custom.value.trim() : '';
+}
+
+function setModelValue(id, value) {
+  const field = modelFieldParts(id);
+  if (!field) return;
+  const next = typeof value === 'string' ? value.trim() : '';
+  if (!usingModelSelect(field)) {
+    if (field.custom && field.custom.value !== next) field.custom.value = next;
+    return;
+  }
+  ensureModelOption(field.select, next);
+  if (field.select.value !== next) field.select.value = next;
+  for (const option of [...field.select.options]) {
+    if (option.dataset.legacy === 'true' && option.value !== next) option.remove();
+  }
+}
+
+function focusModelField(id) {
+  const field = modelFieldParts(id);
+  if (!field) return;
+  const target = usingModelSelect(field) ? field.select : field.custom || field.select;
+  if (target && typeof target.focus === 'function') target.focus();
+}
+
+const MODEL_EMPTY_LABEL = {
+  global: '（不修改，沿用已保存）',
+  vision: '（留空 → 继承全局视觉模型）',
+  judge: '（留空 → 继承全局文本模型）',
+  slot: '（未配置）',
+};
+
+/**
+ * 用模型目录重建一个下拉；目录内没有的旧值会插入「当前：xxx」并选中。
+ * 端点无目录（或目录为空）时隐藏下拉、露出同 id 的「-custom」文本框。
+ */
+function renderModelField(id, baseUrl, options = {}) {
+  const field = modelFieldParts(id);
+  if (!field) return;
+  const {
+    visionOnly = false,
+    emptyLabel = MODEL_EMPTY_LABEL.slot,
+    inheritFromGlobal = false,
+    customHint = '自定义端点：手动填写模型 id',
+  } = options;
+  const previous = readModelValue(id);
+  const catalog = catalogForBaseUrl(baseUrl);
+  const hasCatalog = Boolean(catalog) && catalog.models.length > 0;
+  const signature = [
+    hasCatalog ? catalog.key : 'custom',
+    baseUrl,
+    visionOnly ? 'vision' : 'all',
+    inheritFromGlobal ? 'inherit' : 'own',
+  ].join('|');
+
+  if (field.select.dataset.sig === signature) {
+    if (hasCatalog) {
+      ensureModelOption(field.select, previous);
+      if (field.select.value !== previous) field.select.value = previous;
+    }
+    return;
+  }
+  field.select.dataset.sig = signature;
+
+  if (!hasCatalog) {
+    field.select.hidden = true;
+    field.select.replaceChildren();
+    if (field.custom) {
+      field.custom.hidden = false;
+      if (field.custom.value !== previous) field.custom.value = previous;
+    }
+    if (field.hint) {
+      field.hint.hidden = false;
+      field.hint.dataset.state = 'custom';
+      field.hint.textContent = catalog ? '该端点未内置模型列表，请手动填写模型 id' : customHint;
+    }
+    return;
+  }
+
+  const models = visionOnly ? catalog.models.filter((model) => model.vision) : [...catalog.models];
+  field.select.hidden = false;
+  if (field.custom) {
+    field.custom.hidden = true;
+    if (field.custom.value) field.custom.value = '';
+  }
+
+  const select = field.select;
+  select.replaceChildren();
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = emptyLabel;
+  select.append(blank);
+
+  const groups = new Map();
+  for (const model of models) {
+    const vendor = model.vendor || '其他';
+    if (!groups.has(vendor)) groups.set(vendor, []);
+    groups.get(vendor).push(model);
+  }
+  for (const [vendor, list] of groups) {
+    const group = document.createElement('optgroup');
+    group.label = vendor;
+    for (const model of list) {
+      const option = document.createElement('option');
+      option.value = model.id;
+      option.textContent = model.vision ? `${model.label}（视觉）` : model.label;
+      group.append(option);
+    }
+    select.append(group);
+  }
+  ensureModelOption(select, previous);
+  select.value = previous;
+  if (select.value !== previous) select.value = '';
+
+  if (field.hint) {
+    if (inheritFromGlobal) {
+      field.hint.hidden = false;
+      field.hint.dataset.state = 'inherited';
+      field.hint.textContent = `继承全局端点（${catalog.label}）`;
+    } else if (visionOnly && models.length === 0) {
+      field.hint.hidden = false;
+      field.hint.dataset.state = 'none';
+      field.hint.textContent = '该端点没有可用的视觉模型，可在「视觉识别」里单独配置端点。';
+    } else {
+      field.hint.hidden = true;
+      field.hint.textContent = '';
+      delete field.hint.dataset.state;
+    }
+  }
+}
+
+/** 端点变了就按新的 Base URL 重建全部模型下拉，保留仍然存在的取值。 */
+function refreshModelSelectors() {
+  const globalBase = els.setBaseUrl.value.trim();
+  renderModelField('set-model', globalBase, { emptyLabel: MODEL_EMPTY_LABEL.global });
+  renderModelField('set-vision', globalBase, {
+    emptyLabel: MODEL_EMPTY_LABEL.global,
+    visionOnly: true,
+  });
+  const visionBase = els.visionBase ? els.visionBase.value.trim() : '';
+  renderModelField('vision-model', visionBase || globalBase, {
+    emptyLabel: MODEL_EMPTY_LABEL.vision,
+    visionOnly: true,
+  });
+  const fields = els.ensembleFields;
+  if (!fields) return;
+  fields.candidates.forEach((slot, index) => {
+    const slotBase = slot.base.value.trim();
+    renderModelField(`cand-${index}-model`, slotBase || globalBase, {
+      emptyLabel: MODEL_EMPTY_LABEL.slot,
+      inheritFromGlobal: !slotBase,
+    });
+  });
+  const judgeBase = fields.judge.base.value.trim();
+  renderModelField('judge-model', judgeBase || globalBase, {
+    emptyLabel: MODEL_EMPTY_LABEL.judge,
+    inheritFromGlobal: !judgeBase,
+  });
+}
+
 function makeSettingField({ id, label, type = 'text', placeholder = '', min, max, step, hint }) {
   const wrapper = document.createElement('label');
   wrapper.className = 'field';
@@ -2056,6 +2241,31 @@ function buildEnsembleSlot({ prefix, legend, testid, isCandidate, temperature })
   });
   head.append(name.wrapper, temp.wrapper);
 
+  const modelWrap = document.createElement('div');
+  modelWrap.className = 'field';
+  const modelLabel = document.createElement('label');
+  modelLabel.className = 'field-label';
+  modelLabel.htmlFor = `${prefix}-model`;
+  modelLabel.textContent = '模型';
+  const modelSelect = document.createElement('select');
+  modelSelect.id = `${prefix}-model`;
+  modelSelect.className = 'model-select';
+  modelSelect.autocomplete = 'off';
+  modelSelect.setAttribute('data-testid', 'model-select');
+  const modelCustom = document.createElement('input');
+  modelCustom.id = `${prefix}-model-custom`;
+  modelCustom.className = 'model-custom';
+  modelCustom.type = 'text';
+  modelCustom.autocomplete = 'off';
+  modelCustom.spellcheck = false;
+  modelCustom.placeholder = isCandidate ? '输入模型 id，例如 deepseek-chat' : '留空继承全局文本模型';
+  modelCustom.hidden = true;
+  const modelHint = document.createElement('span');
+  modelHint.id = `${prefix}-model-hint`;
+  modelHint.className = 'field-hint model-hint';
+  modelHint.textContent = isCandidate ? '继承全局端点' : '留空继承全局文本模型';
+  modelWrap.append(modelLabel, modelSelect, modelCustom, modelHint);
+
   const base = makeSettingField({
     id: `${prefix}-base`,
     label: 'Base URL',
@@ -2066,16 +2276,17 @@ function buildEnsembleSlot({ prefix, legend, testid, isCandidate, temperature })
     id: `${prefix}-key`,
     label: 'API Key',
     type: 'password',
-    placeholder: '留空保持不变',
+    placeholder: '留空保持全局 Key',
     hint: '未配置',
   });
-  const model = makeSettingField({
-    id: `${prefix}-model`,
-    label: '模型',
-    placeholder: isCandidate ? '必填，例如 deepseek-chat' : '留空继承全局文本模型',
-  });
 
-  fieldset.append(legendEl, head, base.wrapper, key.wrapper, model.wrapper);
+  const advanced = document.createElement('details');
+  advanced.className = 'slot-advanced';
+  const summary = document.createElement('summary');
+  summary.textContent = '高级：自定义端点 / Key（默认继承全局）';
+  advanced.append(summary, base.wrapper, key.wrapper);
+
+  fieldset.append(legendEl, head, modelWrap, advanced);
   return {
     fieldset,
     fields: {
@@ -2084,7 +2295,9 @@ function buildEnsembleSlot({ prefix, legend, testid, isCandidate, temperature })
       base: base.input,
       key: key.input,
       keyHint: key.hint,
-      model: model.input,
+      model: modelSelect,
+      modelCustom,
+      modelHint,
     },
   };
 }
@@ -2124,11 +2337,11 @@ function renderEnsembleForm() {
   initEnsembleForm();
   const ai = state.settings.ai;
   els.visionBase.value = ai.vision.baseUrl || '';
-  els.visionModel.value = ai.vision.model || '';
   els.visionKey.value = '';
   els.visionKeyHint.textContent = keyHintText(ai.vision.keySource);
   els.visionKeyHint.dataset.state = ai.vision.keySource || 'none';
   els.setEnsembleEnabled.checked = Boolean(ai.ensemble.enabled);
+  setModelValue('vision-model', ai.vision.model || '');
 
   const fields = els.ensembleFields;
   if (!fields) return;
@@ -2137,7 +2350,7 @@ function renderEnsembleForm() {
     if (!target) return;
     target.name.value = slot.name || '';
     target.base.value = slot.baseUrl || '';
-    target.model.value = slot.model || '';
+    setModelValue(`cand-${index}-model`, slot.model || '');
     target.temp.value = String(slot.temperature);
     target.key.value = '';
     target.keyHint.textContent = keyHintText(slot.keySource);
@@ -2146,11 +2359,12 @@ function renderEnsembleForm() {
   const judge = ai.ensemble.judge;
   fields.judge.name.value = judge.name || '';
   fields.judge.base.value = judge.baseUrl || '';
-  fields.judge.model.value = judge.model || '';
+  setModelValue('judge-model', judge.model || '');
   fields.judge.temp.value = String(judge.temperature);
   fields.judge.key.value = '';
   fields.judge.keyHint.textContent = keyHintText(judge.keySource);
   fields.judge.keyHint.dataset.state = judge.keySource || 'none';
+  refreshModelSelectors();
 }
 
 function applyPreset(name) {
@@ -2168,26 +2382,37 @@ function applyPreset(name) {
   const currentBase = els.setBaseUrl.value.trim();
   const baseIsDefault = !currentBase || presetBases.includes(currentBase);
   if (baseIsDefault) els.setBaseUrl.value = preset.baseUrl;
-  if (!els.setModel.value.trim() || (baseIsDefault && presetModels.has(els.setModel.value.trim()))) {
-    els.setModel.value = preset.model;
-  }
+  // 先按新端点重建目录，再按「空值或旧预设值」覆盖模型。
+  refreshModelSelectors();
+
+  const textValue = readModelValue('set-model');
+  if (!textValue || (baseIsDefault && presetModels.has(textValue))) setModelValue('set-model', preset.model);
+  const visionValue = readModelValue('set-vision');
   if (
     preset.visionModel &&
-    (!els.setVision.value.trim() || (baseIsDefault && presetModels.has(els.setVision.value.trim())))
+    (!visionValue || (baseIsDefault && presetModels.has(visionValue)))
   ) {
-    els.setVision.value = preset.visionModel;
+    setModelValue('set-vision', preset.visionModel);
   }
+
   const models = Array.isArray(preset.candidates) ? preset.candidates : [];
   const slots = [...fields.candidates, fields.judge];
   slots.forEach((slot, index) => {
     const suggested = index < fields.candidates.length ? models[index] : preset.judge;
     if (!suggested) return;
     const slotBase = slot.base.value.trim();
-    if (!slotBase || presetBases.includes(slotBase)) slot.base.value = preset.baseUrl;
-    slot.model.placeholder = suggested;
-    const slotModel = slot.model.value.trim();
-    if (!slotModel || presetModels.has(slotModel)) slot.model.value = suggested;
+    if (!slotBase || presetBases.includes(slotBase)) slot.base.value = '';
   });
+  refreshModelSelectors();
+
+  slots.forEach((slot, index) => {
+    const suggested = index < fields.candidates.length ? models[index] : preset.judge;
+    if (!suggested) return;
+    const id = index < fields.candidates.length ? `cand-${index}-model` : 'judge-model';
+    const current = readModelValue(id);
+    if (!current || presetModels.has(current)) setModelValue(id, suggested);
+  });
+  refreshModelSelectors();
   showToast(`已填入 ${preset.label} 的端点与模型，可修改后保存。`, 'info');
 }
 
@@ -2199,10 +2424,11 @@ function clearEnsembleCandidates() {
     const defaults = DEFAULT_CANDIDATES[index];
     slot.name.value = defaults.name;
     slot.base.value = '';
-    slot.model.value = '';
+    setModelValue(`cand-${index}-model`, '');
     slot.temp.value = String(defaults.temperature);
     slot.key.value = '';
   });
+  refreshModelSelectors();
   showToast('已清空候选配置，已保存的密钥不会被删除。', 'info');
 }
 
@@ -2242,8 +2468,8 @@ function openSettings() {
   const ai = state.settings.ai;
   const auto = state.settings.auto;
   els.setBaseUrl.value = ai.baseUrl || '';
-  els.setModel.value = ai.model || '';
-  els.setVision.value = ai.visionModel || '';
+  setModelValue('set-model', ai.model || '');
+  setModelValue('set-vision', ai.visionModel || '');
   els.setApiKey.value = '';
   els.setKeyHint.textContent = ai.hasApiKey ? '已保存密钥（留空表示不修改）' : '未配置密钥，当前为演示模式';
   els.setInterval.value = String(sessionInterval());
@@ -2346,7 +2572,7 @@ async function saveSettings(event) {
   initEnsembleForm();
   const visionBase = els.visionBase.value.trim();
   const visionKey = els.visionKey.value.trim();
-  const visionModelInput = els.visionModel.value.trim();
+  const visionModelInput = readModelValue('vision-model');
   if (!validHttpUrl(visionBase)) {
     showSettingsError('SETTINGS_INVALID', '视觉 Base URL 需以 http:// 或 https:// 开头。');
     els.visionBase.focus();
@@ -2354,7 +2580,7 @@ async function saveSettings(event) {
   }
   if (!validModel(visionModelInput)) {
     showSettingsError('SETTINGS_INVALID', '视觉模型名只能包含字母、数字与 . _ : @ / + -。');
-    els.visionModel.focus();
+    focusModelField('vision-model');
     return;
   }
 
@@ -2364,7 +2590,7 @@ async function saveSettings(event) {
   for (let index = 0; index < candidateCount; index += 1) {
     const slot = fields.candidates[index];
     const slotBase = slot.base.value.trim();
-    const slotModel = slot.model.value.trim();
+    const slotModel = readModelValue(`cand-${index}-model`);
     const slotKey = slot.key.value.trim();
     const rawTemp = slot.temp.value.trim();
     const temperature = rawTemp === '' ? DEFAULT_CANDIDATES[index].temperature : Number(rawTemp);
@@ -2375,7 +2601,7 @@ async function saveSettings(event) {
     }
     if (!validModel(slotModel)) {
       showSettingsError('SETTINGS_INVALID', `候选 ${index + 1} 的模型名只能包含字母、数字与 . _ : @ / + -。`);
-      slot.model.focus();
+      focusModelField(`cand-${index}-model`);
       return;
     }
     if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
@@ -2392,7 +2618,7 @@ async function saveSettings(event) {
   if (fields && fields.judge) {
     const slot = fields.judge;
     const slotBase = slot.base.value.trim();
-    const slotModel = slot.model.value.trim();
+    const slotModel = readModelValue('judge-model');
     const slotKey = slot.key.value.trim();
     const rawTemp = slot.temp.value.trim();
     const temperature = rawTemp === '' ? DEFAULT_JUDGE.temperature : Number(rawTemp);
@@ -2403,7 +2629,7 @@ async function saveSettings(event) {
     }
     if (!validModel(slotModel)) {
       showSettingsError('SETTINGS_INVALID', '评审的模型名只能包含字母、数字与 . _ : @ / + -。');
-      slot.model.focus();
+      focusModelField('judge-model');
       return;
     }
     if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
@@ -2425,9 +2651,21 @@ async function saveSettings(event) {
   }
 
   const aiPatch = {};
+  const textModelValue = readModelValue('set-model');
+  const visionModelValue = readModelValue('set-vision');
+  if (!validModel(textModelValue)) {
+    showSettingsError('SETTINGS_INVALID', '文本模型名只能包含字母、数字与 . _ : @ / + -。');
+    focusModelField('set-model');
+    return;
+  }
+  if (!validModel(visionModelValue)) {
+    showSettingsError('SETTINGS_INVALID', '视觉模型名只能包含字母、数字与 . _ : @ / + -。');
+    focusModelField('set-vision');
+    return;
+  }
   if (baseUrl) aiPatch.baseUrl = baseUrl;
-  if (els.setModel.value.trim()) aiPatch.model = els.setModel.value.trim();
-  if (els.setVision.value.trim()) aiPatch.visionModel = els.setVision.value.trim();
+  if (textModelValue) aiPatch.model = textModelValue;
+  if (visionModelValue) aiPatch.visionModel = visionModelValue;
   if (apiKey) aiPatch.apiKey = apiKey;
 
   const visionPatch = { baseUrl: visionBase, model: visionModelInput };
@@ -2918,6 +3156,13 @@ function bindEvents() {
   });
   els.setSensitivity.addEventListener('input', () => {
     els.setSensitivityLabel.textContent = describeSensitivity(els.setSensitivity.value);
+  });
+  els.setBaseUrl.addEventListener('input', refreshModelSelectors);
+  els.setBaseUrl.addEventListener('change', refreshModelSelectors);
+  els.visionBase.addEventListener('input', refreshModelSelectors);
+  els.ensembleSlots.addEventListener('input', (event) => {
+    const target = event.target;
+    if (target && typeof target.id === 'string' && target.id.endsWith('-base')) refreshModelSelectors();
   });
   for (const button of els.presetButtons) {
     button.addEventListener('click', () => applyPreset(button.dataset.preset));

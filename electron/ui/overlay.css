@@ -1420,7 +1420,8 @@ input[type="range"]::-webkit-slider-thumb {
 .field input[type="text"],
 .field input[type="url"],
 .field input[type="password"],
-.field input[type="number"] {
+.field input[type="number"],
+.field select.model-select {
   width: 100%;
   padding: 6px 8px;
   border-radius: var(--radius-xs);
@@ -1430,8 +1431,59 @@ input[type="range"]::-webkit-slider-thumb {
   user-select: text;
 }
 
+.field select.model-select {
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.field select.model-select option,
+.field select.model-select optgroup {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.field select.model-select:focus-visible,
 .field input:focus-visible {
   outline-offset: 1px;
+}
+
+.model-hint {
+  word-break: break-word;
+}
+
+.model-hint[data-state="inherited"] {
+  color: var(--text-muted);
+}
+
+.model-hint[data-state="custom"] {
+  color: var(--text-faint);
+}
+
+.model-hint[data-state="none"] {
+  color: var(--warn);
+}
+
+.slot-advanced {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.slot-advanced > summary {
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 0;
+  user-select: none;
+}
+
+.slot-advanced > summary:hover {
+  color: var(--text);
+}
+
+.slot-advanced[open] > summary {
+  margin-bottom: 2px;
 }
 
 .form-error {

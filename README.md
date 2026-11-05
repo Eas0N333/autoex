@@ -10,6 +10,7 @@
 - **视觉识别**：图片交给多模态模型转写题干、学科、题型、选项（LaTeX 保留为 `$...$`），识别结果可手动修改、增删选项。
 - **流式解答**：`fetch` + SSE，边生成边渲染 Markdown，支持 `停止`；答案先给结论再给解析，三档风格（简洁 / 详细 / 逐步讲解）。
 - **多模型交叉验证**：一次解答可并行调用 3 个模型独立作答，再由评审模型核对三份答案、纠正分歧并流式输出最终答案（DeepSeek 官方 / Command Code 订阅等 OpenAI 兼容端点可混用）。
+- **模型下拉选择**：桌面设置里文本模型、识别模型（OCR）、候选与评审模型都从内置目录下拉选择；目录按全局 Base URL 自动切换（Command Code 67 个、DeepSeek 官方 2 个），无需手输模型名。
 - **缓存与历史**：相同题目 + 风格命中服务端答案缓存（`来自缓存` 标记）；最近 20 条记录保存在本机 `localStorage`。
 - **演示模式**：未配置 Key 时用内置示例题库，整条链路（识别 → SSE 解答 → 缓存 → 历史）照常可跑，页面有明确标记。
 
@@ -25,7 +26,7 @@ npm run desktop    # 启动悬浮窗
 ```
 
 - 首次启动即为**演示模式**（内置示例题库，无需 Key），窗口顶部有"演示"徽标。
-- 切换在线模式：打开设置抽屉，填写 API Base URL / Key / 文本模型 / 视觉模型。设置保存在系统 userData 目录（Windows `%APPDATA%\AI 答题助手\settings.json`，macOS `~/Library/Application Support/AI 答题助手/settings.json`）。
+- 切换在线模式：打开设置抽屉，填写 API Base URL / Key，再从下拉中选择文本模型与视觉模型。设置保存在系统 userData 目录（Windows `%APPDATA%\AI 答题助手\settings.json`，macOS `~/Library/Application Support/AI 答题助手/settings.json`）。
 - 调试用环境变量：`AQS_SETTINGS=<文件路径>` 覆盖设置文件位置，`AI_DEMO=1` 强制演示模式。
 
 ### 使用
@@ -51,35 +52,37 @@ npm run desktop    # 启动悬浮窗
 ```json
 {
   "ai": {
-    "baseUrl": "https://api.deepseek.com",
-    "apiKey": "sk-…",
-    "model": "deepseek-flash",
-    "visionModel": "deepseek-flash",
+    "baseUrl": "https://api.commandcode.ai/provider/v1",
+    "apiKey": "cmd-…",
+    "model": "deepseek/deepseek-v4.1-flash",
+    "visionModel": "deepseek/deepseek-v4.1-flash",
     "ensemble": {
       "enabled": true,
       "candidates": [
-        { "name": "DeepSeek Flash", "model": "deepseek-flash", "temperature": 0.3 },
-        { "name": "DeepSeek V4 Pro", "model": "deepseek-v4-pro", "temperature": 0.6 },
-        { "name": "Command Code", "baseUrl": "https://api.commandcode.ai/provider/v1", "apiKey": "cmd-…", "model": "deepseek/deepseek-v4.1-flash", "temperature": 0.9 }
+        { "name": "DeepSeek V4.1 Flash", "model": "deepseek/deepseek-v4.1-flash", "temperature": 0.3 },
+        { "name": "Gemini 3.8 Flash", "model": "google/gemini-3.8-flash", "temperature": 0.6 },
+        { "name": "Qwen 3.8 Max", "model": "Qwen/Qwen3.8-Max", "temperature": 0.9 }
       ],
-      "judge": { "name": "评审", "baseUrl": "https://api.commandcode.ai/provider/v1", "apiKey": "cmd-…", "model": "deepseek/deepseek-v4.1-flash" }
+      "judge": { "name": "评审", "model": "deepseek/deepseek-v4-pro", "temperature": 0.1 }
     }
   }
 }
 ```
 
-预设（设置抽屉一键填入端点与模型，已有值不会被覆盖）：
+上例所有候选与评审都省略了 `baseUrl` / `apiKey`，因此共用同一个 Command Code 订阅 Key。网页版没有桌面设置抽屉，模型字段直接写目录里的 id；桌面下拉会把同一个 id 显示成可读名称（如 `DeepSeek V4.1 Flash (latest)`）。
 
-| 预设 | Base URL | 模型示例（均走 `/chat/completions`） |
+预设与下拉目录（设置抽屉先选 Base URL，模型一栏就变成该端点的下拉；已有值不会被覆盖）：
+
+| 预设 | Base URL | 下拉可选模型（均走 `/chat/completions`） |
 | --- | --- | --- |
-| Command Code 订阅 | `https://api.commandcode.ai/provider/v1` | `deepseek/deepseek-v4.1-flash`（含视觉）、`deepseek/deepseek-v4-pro`、`google/gemini-3.8-flash` |
-| DeepSeek 官方 | `https://api.deepseek.com` | `deepseek-flash`（含视觉）、`deepseek-v4-pro`（无视觉） |
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| Command Code 订阅（GOAT） | `https://api.commandcode.ai/provider/v1` | 67 个（其中 11 个支持视觉）：`deepseek/*`、`google/gemini-*`、`gpt-*`、`Qwen/*`、`GLM/*`、`Kimi/*`、`Grok/*` 等 |
+| DeepSeek 官方 | `https://api.deepseek.com` | `deepseek-flash`（支持视觉）、`deepseek-v4-pro`（无视觉） |
+| OpenAI | `https://api.openai.com/v1` | 无内置目录：回退为文本输入（如 `gpt-4o-mini`），自定义端点同样如此 |
 
-候选与评审的 Base URL / Key 留空会自动继承全局 `ai` 配置（同一个订阅 Key 可跑多个模型）；只有填写了模型名的候选才参与，至少需要 2 个。Command Code 使用 `Authorization: Bearer <CMD_API_KEY>`，模型名形如 `deepseek/deepseek-v4.1-flash`。
+Command Code 只需在「模型服务」填**一个订阅 Key**：候选与评审的 Base URL / Key 收在「高级：自定义端点 / Key」里且默认折叠，留空即继承全局，同一个订阅 Key 可以驱动多个模型；模型、视觉模型、候选、评审全部从下拉里选，不用记模型名。下拉随全局 Base URL 切换（hostname 含 `commandcode.ai` → 67 个 GOAT 模型；含 `api.deepseek.com` → 2 个官方模型；OpenAI 与其它自定义端点没有内置目录，回退为手输模型 id）。只有选中了模型的候选才参与，至少需要 2 个。Command Code 使用 `Authorization: Bearer <CMD_API_KEY>`。
 
 > - DeepSeek 官方 `deepseek-flash`（V4.1 Flash）**支持视觉**，可直接把 `visionModel` 设为 `deepseek-flash`（图片按官方文档以 `image_url` + base64 data URL 放在 user 消息里）；`deepseek-v4-pro` 不支持视觉。
-> - Command Code 的 **Claude 模型只提供 `/messages` 端点**，本应用走 `/chat/completions`，候选/评审请选 OpenAI 或开源模型（如 `deepseek/*`、`google/gemini-*`、`gpt-*`）；填 `claude-*` 会被上游 400 拒绝。
+> - Command Code 的 67 个模型是 GOAT 计划可用模型与 `/provider/v1/models` 中支持 `/chat/completions` 的交集。**Claude 系列只提供 `/messages` 端点**，本应用统一走 `/chat/completions`，所以不在下拉里；`Jev` 是 decision 模型，同样不可选。
 > - Command Code 的模型目录可公开查询：`GET https://api.commandcode.ai/provider/v1/models`（含 `supported_endpoints`）。
 
 ### 自动检测与隐私
@@ -166,7 +169,7 @@ npm start
 ## 测试
 
 ```bash
-npm test              # node:test 单测/集成测试（74 项），无网络、无 Key，端口随机
+npm test              # node:test 单测/集成测试（85 项），无网络、无 Key，端口随机
 npm run smoke         # 启动真实 HTTP 进程跑完整 demo 链路，输出 SMOKE OK
 npm run desktop:smoke # 启动真实 Electron 进程，校验左边缘停靠 + 截图，输出 DESKTOP SMOKE OK
 ```
@@ -179,7 +182,7 @@ npm run desktop:smoke # 启动真实 Electron 进程，校验左边缘停靠 + �
 server/  config.js 配置 · provider.js 模型客户端（live/demo）· recognize.js 视觉识别
          answer.js 解答提示词与流式 · index.js HTTP/SSE/静态/限流 · cache.js · mock.js
          engine.js 主进程/HTTP 共用的引擎 · ensemble.js 三模型并行 + 评审 · config.js 配置
-electron/ main.js 窗口/托盘/快捷键 · settings.js 配置与密钥掩码 · sources.js 窗口源 · preload.cjs · ui/ 悬浮窗前端
+electron/ main.js 窗口/托盘/快捷键 · settings.js 配置与密钥掩码 · model-catalog.js 内置模型目录（下拉选项）· sources.js 窗口源 · preload.cjs · ui/ 悬浮窗前端
 web/     index.html · app.js 交互与 SSE · render.js 安全 Markdown/数学 · styles.css
 build/   icon.png · icon.ico · tray.png · trayTemplate.png（打包与托盘图标）
 scripts/ smoke.mjs（HTTP 冒烟）· desktop-smoke.mjs（Electron 冒烟）
